@@ -1,0 +1,3 @@
+data:
+  name: dummy_dataset
+  images: ../data_examples/TUM/color
