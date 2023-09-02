@@ -10,7 +10,7 @@ import numpy as np
 import omegaconf
 
 from .base_dataset import BaseDataset
-from .utils import resize, numpy_image_to_torch
+from .utils import *
 from dataset import logger
 
 
@@ -56,11 +56,7 @@ class DummyLoader(BaseDataset, Dataset):
 
     def __getitem__(self, index):
         path = self.images[index]
-        if self.conf.grayscale:
-            mode = cv2.IMREAD_GRAYSCALE
-        else:
-            mode = cv2.IMREAD_COLOR
-        img = cv2.imread(str(Path(self.root, path)), mode)
+        img = read_image(str(Path(self.root, path)), self.conf.grayscale)
         if img is None:
             logger.warning(f'Image {str(path)} could not be read.')
             img = np.zeros((1024, 1024) + (() if self.conf.grayscale else (3,)))
@@ -69,12 +65,14 @@ class DummyLoader(BaseDataset, Dataset):
 
         if self.conf.resize:
             if isinstance(self.conf.resize, omegaconf.listconfig.ListConfig):
-                new_size = self.conf.resize.to_container()
+                new_size = list(self.conf.resize)
+            elif isinstance(self.conf.resize, int) or isinstance(self.conf.resize, float):
+                new_size = self.conf.resize
             else:
                 raise ValueError(self.conf.resize)
             args = {'interp': self.conf.interpolation}
             h, w = img.shape[:2]
-            img = cv2.resize(img, new_size, **args)
+            img = resize(img, new_size, **args)
 
         data = {
             'name': str(path),
