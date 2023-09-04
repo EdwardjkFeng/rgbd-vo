@@ -4,6 +4,7 @@ import time
 import inspect
 import numpy as np
 from collections import defaultdict
+from omegaconf import OmegaConf, DictConfig
 
 
 class Timer(object):
@@ -71,3 +72,13 @@ def get_class(mod_name, base_path, BaseClass):
     classes = [c for c in classes if issubclass(c[1], BaseClass)]
     assert len(classes) == 1, classes
     return classes[0][1]
+
+
+def print_conf(conf: DictConfig, prefix: str = ''):
+    """ Print configurations. """
+    for k, v in conf.items():
+        if isinstance(v, DictConfig):
+            # Recursively iterate through nested configs
+            print_conf(v, prefix=f"{prefix}{k}.")
+        else:
+            print(f"{prefix}{k}: {v}")
