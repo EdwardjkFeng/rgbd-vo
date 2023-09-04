@@ -1,6 +1,12 @@
+""" Utility functions """
+
+import os.path as osp
+
 import numpy as np
 import torch
 import cv2
+import torchvision.transforms as transforms
+import torchvision.transforms.functional as transF
 
 
 def resize(image, size, interp):
@@ -24,7 +30,7 @@ def resize(image, size, interp):
         'nearest': cv2.INTER_NEAREST,
         'cubic': cv2.INTER_CUBIC
     }[interp]
-    return cv2.resize(image, (w_new, h_new), interpolation=mode)
+    return cv2.resize(image, (w_new, h_new), interpolation=mode), scale
 
 
 def numpy_image_to_torch(image):
@@ -35,7 +41,7 @@ def numpy_image_to_torch(image):
         image = image[None] # add channel dim
     else:
         raise ValueError(f'Input with shape {image.shape} is not an expected image.')
-    img_torch = torch.from_numpy(image / 255.).float()
+    img_torch = torch.from_numpy(image.astype(np.float32))
     return img_torch
 
 
@@ -74,3 +80,8 @@ def read_image(path, grayscale=None):
     return image
 
 
+def normalize_color(images):
+    """ Normalize colors """
+    mean = torch.as_tensor([0.4914, 0.4822, 0.4465], device=images.device)
+    std = torch.as_tensor([0.2023, 0.1994, 0.2010], device=images.device)
+    return (images/255.0).sub_(mean[:, None, None]).div_(std[:, None, None])

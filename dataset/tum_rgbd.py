@@ -5,12 +5,15 @@ Data loader fot TUM RBGD benchmark
 
 import sys, os
 import os.path as osp
+import random
 import pickle
 from pathlib import Path
+from omegaconf import OmegaConf
 
 import numpy as np
 import logging
 import torch.utils.data as data
+from transforms3d import quaternions
 
 import cv2
 from tqdm import tqdm
@@ -19,6 +22,8 @@ from .base_dataset import BaseDataset
 from .setting import DATA_PATH
 from .utils import *
 from dataset import logger
+from utils.tools import print_conf, merge_dict
+
 
 """ 
 The following scripts use the directory structure as:
@@ -33,7 +38,7 @@ root
     └── rgb.txt
 """
 
-def tum_trainval_dict():
+def tum_sequences_dict():
     """ the sequence dictionary of TUM dataset
         https://vision.in.tum.de/data/datasets/rgbd-dataset/download
 
@@ -43,7 +48,9 @@ def tum_trainval_dict():
     return  {
         'fr1': {
             'calib': [525.0, 525.0, 319.5, 239.5],
-            'seq': ['rgbd_dataset_freiburg1_desk2',
+            'seq': ['rgbd_dataset_freiburg1_360',
+                    'rgbd_dataset_freiburg1_desk',
+                    'rgbd_dataset_freiburg1_desk2',
                     'rgbd_dataset_freiburg1_floor',
                     'rgbd_dataset_freiburg1_room',
                     'rgbd_dataset_freiburg1_xyz',
@@ -55,9 +62,11 @@ def tum_trainval_dict():
 
         'fr2': {
             'calib': [525.0, 525.0, 319.5, 239.5],
-            'seq': ['rgbd_dataset_freiburg2_360_hemisphere',
+            'seq': ['rgbd_dataset_freiburg2_desk',
+                    'rgbd_dataset_freiburg2_360_hemisphere',
                     'rgbd_dataset_freiburg2_large_no_loop',
                     'rgbd_dataset_freiburg2_large_with_loop',
+                    'rgbd_dataset_freiburg2_pioneer_360',
                     'rgbd_dataset_freiburg2_pioneer_slam',
                     'rgbd_dataset_freiburg2_pioneer_slam2',
                     'rgbd_dataset_freiburg2_pioneer_slam3',
@@ -81,7 +90,6 @@ def tum_trainval_dict():
                 'rgbd_dataset_freiburg3_nostructure_notexture_near_withloop',
                 'rgbd_dataset_freiburg3_nostructure_texture_far',
                 'rgbd_dataset_freiburg3_nostructure_texture_near_withloop',
-                # 'rgbd_dataset_freiburg3_long_office_household',
                 'rgbd_dataset_freiburg3_structure_notexture_near',
                 'rgbd_dataset_freiburg3_structure_texture_far',
                 'rgbd_dataset_freiburg3_structure_texture_near',
@@ -91,37 +99,10 @@ def tum_trainval_dict():
                 'rgbd_dataset_freiburg3_sitting_rpy',
                 'rgbd_dataset_freiburg3_sitting_static',
                 'rgbd_dataset_freiburg3_sitting_xyz',
+                'rgbd_dataset_freiburg3_walking_static', # dynamic scene
+                'rgbd_dataset_freiburg3_walking_xyz',        # dynamic scene
+                'rgbd_dataset_freiburg3_long_office_household',
             ]
-        }
-    }
-
-def tum_test_dict():
-    """ the trajectorys held out for testing TUM dataset
-    """
-    return  {
-        'fr1': {
-            'calib': [525.0, 525.0, 319.5, 239.5],
-            'seq': ['rgbd_dataset_freiburg1_360',
-                    'rgbd_dataset_freiburg1_desk']
-        },
-
-        'fr2': {
-            'calib': [525.0, 525.0, 319.5, 239.5],
-            'seq': ['rgbd_dataset_freiburg2_desk',
-                    'rgbd_dataset_freiburg2_pioneer_360']
-        },
-
-        # 'fr3': {
-        #     'calib': [525.0, 525.0, 319.5, 239.5],
-            # 'seq': ['rgbd_dataset_freiburg3_walking_static', # dynamic scene
-            #         'rgbd_dataset_freiburg3_walking_xyz',        # dynamic scene
-            #         'rgbd_dataset_freiburg3_long_office_household']
-        # },
-
-        'default': {
-            'calib': [525.0, 525.0, 319.5, 239.5],
-            'seq': ['None',  # anything not list here
-                    ]
         }
     }
 
@@ -146,21 +127,304 @@ class _Dataset(data.Dataset):
     def __init__(self, conf):
         super().__init__()
         self.root = Path(DATA_PATH, conf.dataset_dir, conf.sequence)
+        print(self.root)
         self.conf = conf
+
+        self.rgb_seq = []  # list(seq) or list(frame) of string (rbg image path)
+        self.timestamp = [] # empty
+        self.detph_seq = [] # list(seq) of list(frame) of string (depth image path)
+        self.invalid_seq = []  # empty
+        self.cam_pose_seq = [] # list(seq) of list(frame) of 4 x 4 ndarray
+        self.calib = [] # list(seq) of list(intrinsics: fx, fy, cx, cy)
+        self.seq_names = [] # list(seq) or string(seq name)
+
+        self.ids = 0 
+        self.seq_acc_ids = [0]
+        self.keyframes = self.conf.keyframes
 
         self.rgb_files = sorted([f for f in os.listdir(os.path.join(self.root, 'rgb')) if f.endswith('.png')])
         self.depth_files = sorted([f for f in os.listdir(os.path.join(self.root, 'depth')) if f.endswith('.png')])
+
+        logger.info(f"TUM dataloader using keyframe {self.keyframes}: \
+                    {self.ids} valid frames.")
+        
+    
+    def _load(self):
+        tum_data = tum_sequences_dict()
+        for ks, scene in tum_data.items():
+            for seq_name in scene['seq']:
+                seq_path = seq_name 
+                if self.conf.select_traj is not None:
+                    if seq_path != self.conf.select_traj: continue
+                
+                self.calib.append(scene['calib'])
+                sync_traj_file = osp.join(
+                    self.root, seq_path, 'sync_trajectory.pkl')
+                if not osp.isfile(sync_traj_file):
+                    logger.info(
+                        f"Synchronized trajectory file {sync_traj_file} has \
+                            not been generated.")
+                    logging.info("Generate it now ...")
+                    write_sync_trajectory(self.root, '', seq_name)
+                
+                with open(sync_traj_file, 'rb') as f:
+                    trajs = pickle.load(f)
+                    total_num = len(trajs)
+
+                    # TODO split train and validation sets
               
+                    images = [trajs[idx][1] for idx in range(total_num)]
+                    depths = [trajs[idx][2] for idx in range(total_num)]
+                    poses = [tq2mat(trajs[idx][0] for idx in range(total_num))]
+                    self.rgb_seq.append(images)
+                    self.detph_seq.append(depths)
+                    self.cam_pose_seq.append(poses)
+                    self.seq_names.append(seq_path)
+                    self.ids += max(0, len(images) - max(self.keyframes))
+                    self.seq_acc_ids.append(self.ids)
+
     def __getitem__(self, idx):
-        rgb_path = self.rgb_files[idx]
-        rgb_image = read_image(str(Path(self.root, 'rgb', rgb_path)), self.conf.grayscale)
-        size = rgb_image.shape[:2]
+        seq_idx = max(np.searchsorted(self.seq_acc_ids, idx+1) - 1, 0)
+        frame_idx = idx - self.seq_acc_ids[seq_idx]
+
+        this_idx = frame_idx
+        next_idx = frame_idx + random.choice(self.keyframes)
+
+        color0, scale = self._load_rgb_tensor(self.rgb_seq[seq_idx][this_idx])
+        color1, _ = self._load_rgb_tensor(self.rgb_seq[seq_idx][next_idx])
+
+        depth0 = self._load_depth_tensor(self.detph_seq[seq_idx][this_idx])
+        depth1 = self._load_depth_tensor(self.detph_seq[seq_idx][next_idx])
+
+        # normalize the coordinate
+        calib = np.asarray(self.calib[seq_idx], dtype=np.float32)
+        calib[0] *= scale[0]
+        calib[1] *= scale[1]
+        calib[2] *= scale[0]
+        calib[3] *= scale[1]
+
+        cam_pose0 = self.cam_pose_seq[seq_idx][this_idx]
+        cam_pose1 = self.cam_pose_seq[seq_idx][this_idx]
+        transform = np.dot(np.linalg.inv(cam_pose1), cam_pose0).astype(np.float32)
+
+        name = {'seq': self.seq_names[seq_idx], 
+                'frame0': this_idx,
+                'frame1': next_idx}
+        
+        # camera_info
+        camera_info = {"height": color0.shape[0],
+                       "width": color0.shape[1],
+                       "fx": calib[0],
+                       "fy": calib[1],
+                       "ux": calib[2],
+                       "uy": calib[3]}
+        
         data = {
-            'name': str(rgb_path),
-            'image': numpy_image_to_torch(rgb_image),
-            'original_image_size': np.array(size)
+            'name': name, 
+            'data': [color0, color1, depth0, depth1, transform, calib],
+            'camera_info': camera_info,
         }
         return data
 
     def __len__(self):
         return len(self.rgb_files)
+
+    def _load_rgb_tensor(self, path):
+        """ Load the rgb image. """
+        image = read_image(path, self.conf.grayscale) / 255.
+        image, scale = resize(image, self.conf.resize, interp='bilinear')
+        return numpy_image_to_torch(image), scale
+    
+    def _load_depth_tensor(self, path):
+        """ Load depth:
+        The depth images are scaled by a factor of 5000, i.e., a pixel value of 5000 in the depth image corresponds to a distance of 1 meter from the camera, 10000 to 2 meter distance, etc. A pixel value of 0 means missing value/no data.
+        """
+        depth = read_image(path) / 5e3
+        depth, _ = resize(depth, self.conf.resize, interp='nearest')
+        if self.conf.truncated_depth:
+            depth = np.clip(depth, a_min=0.5, a_max=5.0) # the accurate range of kinect depth
+        return numpy_image_to_torch(depth)
+
+
+"""
+Some utilities to work with TUM RGB-D data
+"""
+
+def tq2mat(tq):
+    """ Transform translation-quaternion (tq) to (4x4) matrix. """
+    tq = np.array(tq)
+    T = np.eye(4)
+    T[:3, :3] = quaternions.quat2mat(np.roll(tq[:3], 1))
+    T[:3, :3] = tq[:3]
+    return T
+
+
+def write_sync_trajectory(local_dir, dataset, subject_name):
+    """ Generate synchronized trajectories.
+
+    Args:
+        local_dir: the root of the directory
+        dataset: 
+        subject_name: the dataset category 'fr1', 'fr2', or 'fr3'
+    """
+
+    rgb_file = osp.join(local_dir, dataset, subject_name, 'rgb.txt')
+    depth_file = osp.join(local_dir, dataset, subject_name, 'depth.txt')
+    pose_file = osp.join(local_dir, dataset, subject_name, 'groundtruth.txt')
+
+    rgb_list = read_file_list(rgb_file)
+    depth_list = read_file_list(depth_file)
+    pose_list = read_file_list(pose_file)
+
+    matches = associate_three(rgb_list, depth_list, pose_list, offset=0.0, max_difference=0.02)
+
+    trajectory_info = []
+    for (a, b, c) in matches:
+        pose = [float(x) for x in pose_list[c]]
+        rgb_file = osp.join(local_dir, dataset, subject_name, rgb_list[a][0])
+        depth_file = osp.join(local_dir, dataset, subject_name, depth_list[b][0])
+        trajectory_info.append([pose, rgb_file, depth_file])
+
+    dataset_path = osp.join(local_dir, dataset, subject_name, 'sync_trajectory.pkl')
+
+    with open(dataset_path, 'wb') as output:
+        pickle.dump(trajectory_info, output)
+    
+    txt_path = osp.join(local_dir, dataset, subject_name, 'sync_trajectory.txt')
+    pickle2txt(dataset_path, txt_path)
+
+
+def pickle2txt(pickle_file, txt_file):
+    """ Write the pickle_file into a txt_file. """
+    with open(pickle_file, 'rb') as pkl_file:
+        traj = pickle.load(pkl_file)
+
+    with open(txt_file, 'w') as f:
+        for frame in traj:
+            f.write(' '.join(['%f ' % x for x in frame[0]]))
+            f.write(frame[1] + ' ')
+            f.write(frame[2] + '\n')    
+
+
+"""
+The following utility files are provided by TUM RGBD dataset benchmark
+
+Refer: https://vision.in.tum.de/data/datasets/rgbd-dataset/tools
+"""
+
+def read_file_list(filename):
+    """ Read a trajectroy from a text file.
+
+    File format:
+    The file format is "stamp d1 d2 d3 ...", where stamp denotes the time stamp (to be matched)
+    and "d1 d2 d3 ..." is the 3D position and 3D orientation associated to this timestamp.
+
+    Args:
+        filename: file name.
+
+    Returns:
+        dict: dictonary of (stamp, data) tuples
+    """
+
+    file = open(filename)
+    data = file.read()
+    lines = data.replace(",", " ").replace("\t", " ").split("\n")
+    list = [[v.strip() for v in line.split(" ") if v.strip() != ""] 
+            for line in lines if len(line)>0 and line[0] != "#"]
+    list = [(float(l[0]), l[1:]) for l in list if len(l) > 1]
+    return dict(list)
+
+
+def associate(first_list, second_list, offset, max_difference):
+    """ Associate two dictionaries of (stamp, data). As the time stamps never match exactly, we aim to find the closest match for every input tuple.
+
+    Args:
+        first_list: first dictionary of (stamp, data) tuples
+        second_list: second dictionary of (stamp, data) tuples
+        offset: time offset between both dictionaries (e.g., to model the delay between the sensors)
+        max_difference: search radius for candidate generation
+
+    Returns:
+        matches: list of matched tuples ((stamp1, data1), (stamp2, data2))
+    """
+
+    first_keys = first_list.keys()
+    second_keys = second_list.keys()
+    potential_matches = [(abs(a - (b + offset)), a, b)
+                         for a in first_keys
+                         for b in second_keys
+                         if abs(a - (b + offset)) < max_difference]
+    potential_matches.sort()
+    matches = []
+    for diff, a, b in potential_matches:
+        if a in first_keys and b in second_keys:
+            first_keys.remove(a)
+            second_keys.remove(b)
+            matches.append((a, b))
+        
+    matches.sort()
+    return matches
+
+
+def associate_three(
+        first_list, 
+        second_list, 
+        third_list, 
+        offset, 
+        max_difference
+    ):
+    """ Associate two dictionaries of (stamp, data). As the time stamps never match exactly, we aim to find the cloeset match for every input tuple.
+
+    Args:
+        first_list: first dict of (stamp, data) tuples (default to be rgb)
+        second_list: second dict of (stamp, data) tuplse (default to be depth)
+        third_list: third dict of (stamp, data) tuples (default to be pose)
+        offset: time offset between dictionaries (e.g., to model the delay between the sensors)
+        max_difference: search radius for candidate generation
+    """
+
+    first_keys = list(first_list)
+    second_keys = list(second_list)
+    third_keys = list(third_list)
+
+    # find the potential matches in (rgb, depth)
+    matches_ab = associate(first_list, second_list, offset, max_difference)
+
+    # find the potential matches in (rgb, depth, pose)
+    potential_matches = [(abs(a - (c + offset)), abs(b - (c + offset)), a,b,c)
+                         for (a, b) in matches_ab
+                         for c in third_keys
+                         if abs(a - (c + offset)) < max_difference and
+                         abs(b - (c + offset)) < max_difference]
+    
+    potential_matches.sort()
+    matches_abc = []
+    for diff_rbg, diff_depth, a, b, c in potential_matches:
+        if a in first_keys and b in second_keys and c in third_keys:
+            first_keys.remove(a)
+            second_keys.remove(b)
+            third_keys.remove(c)
+            matches_abc.append((a, b, c))
+    matches_abc.sort()
+    return matches_abc    
+    
+
+if __name__ == '__main__':
+    
+    loader = TUM().get_dataset()
+
+    import torchvision.utils as torch_utils
+
+    torch_loader = data.DataLoader(loader, batch_size=16,
+                                   shuffle=False, num_workers=4)
+    
+    for batch in torch_loader:
+        color0, color1, depth0, depth1, transform, K, name = batch
+        B, C, H, W = color0.shape
+
+        bcolor0_img = torch_utils.make_grid(color0, nrow=4)
+
+        import matplotlib.pyplot as plt
+        plt.figure()
+        plt.imshow(bcolor0_img.numpy().transposse(1, 2, 0))
+        plt.show()

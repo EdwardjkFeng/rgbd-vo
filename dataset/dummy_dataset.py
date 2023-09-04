@@ -72,7 +72,7 @@ class DummyLoader(BaseDataset, Dataset):
                 raise ValueError(self.conf.resize)
             args = {'interp': self.conf.interpolation}
             h, w = img.shape[:2]
-            img = resize(img, new_size, **args)
+            img, _ = resize(img, new_size, **args)
 
         data = {
             'name': str(path),
