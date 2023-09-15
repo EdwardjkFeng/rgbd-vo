@@ -241,7 +241,7 @@ class _Dataset(data.Dataset):
         """
         depth = read_image(path) / 5e3
         depth, _ = resize(depth, self.conf.resize, interp='nearest')
-        if self.conf.truncated_depth:
+        if self.conf.truncate_depth:
             depth = np.clip(depth, a_min=0.5, a_max=5.0) # the accurate range of kinect depth
         return numpy_image_to_torch(depth)
 
@@ -254,8 +254,8 @@ def tq2mat(tq):
     """ Transform translation-quaternion (tq) to (4x4) matrix. """
     tq = np.array(tq)
     T = np.eye(4)
-    T[:3, :3] = quaternions.quat2mat(np.roll(tq[:3], 1))
-    T[:3, :3] = tq[:3]
+    T[:3, :3] = quaternions.quat2mat(np.roll(tq[3:], 1))
+    T[:3, 3] = tq[:3]
     return T
 
 
