@@ -1,0 +1,24 @@
+TUM_RGBD:
+  jingkun-omen:
+    dataset_root: '/home/jingkun/Dataset/TUM'
+  
+ICL-NUIM:
+  jingkun-omen:
+    dataset_root: '/home/jingkun/Dataset/ICL'
+
+ETH3D: 
+  jingkun-omen:
+    dataset_root: '/home/jingkun/Dataset/ETH3D'
+
+
+Oxford_multimotion:
+  jingkun-omen:
+    dataset_root: '/home/jingkun/Dataset/Oxford-multimotion'
+
+TartanAir:
+  jingkun-omen:
+    dataset_root: '/home/jingkun/Dataset/tartanair'
+
+CoFusion:
+  jingkun-omen:
+    dataset_root: '/home/jingkun/Dataset/CoFusion'
