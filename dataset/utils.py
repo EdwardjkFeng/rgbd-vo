@@ -1,6 +1,7 @@
 """ Utility functions """
 
 import os.path as osp
+from typing import Union, Tuple, List
 
 import numpy as np
 import torch
@@ -9,8 +10,24 @@ import torchvision.transforms as transforms
 import torchvision.transforms.functional as transF
 
 
-def resize(image, size, interp):
-    """ Resize an image to a fixed size, or according to max edge. """
+def resize(image, size: Union(int, float, Tuple, List), interp):
+    """Resize an image to a fixed size, or according to max edge.
+
+    Args:
+        image: input image of shape (h, w, c) or (h, w)
+        size: 
+            - new size as tuple or list (h, w)
+            - new size as int, scale = (size_new, max(h, w))
+            - scale as float, size_new = size_old * scale
+        interp: interpolation methods to apply, `'linear'|'nearest'|'cubic'`
+
+    Raises:
+        ValueError:
+
+    Returns:
+        resized images of shape (h_new, w_new, c)
+        scale: size_new / size_old
+    """
     h, w = image.shape[:2]
     if isinstance(size, int):
         scale = size/ max(h, w)

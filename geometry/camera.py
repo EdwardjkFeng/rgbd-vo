@@ -180,4 +180,4 @@ class Camera(TensorWrapper):
         return J, valid
     
     def __repr__(self) -> str:
-        return f'Cmaera {self.shape} {self.dtype} {self.device} {self._data}'
+        return f'Camera: {self.shape} {self.dtype} {self.device} {self._data}'
