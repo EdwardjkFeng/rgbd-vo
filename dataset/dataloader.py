@@ -13,6 +13,9 @@ except ImportError:
 
 
 def get_datasets_path(which_dataset):
+    """ Smarter getter of the dataset path of the specified dataset from a yaml file. Since datasets are stored in different paths on different end, this function detects the hostname of the machine and pick the predefined path under this name. 
+    """
+
     curr_path = os.path.realpath(__file__)
     env_file_path = os.path.realpath(os.path.join(curr_path, '../config/datasets.yaml'))
     hostname = str(socket.gethostname())
@@ -27,13 +30,19 @@ OXFORD_DIR = get_datasets_path('Oxford_multimotion')
 TARTAN_DATASET_DIR = get_datasets_path('TartanAir')
 
 
-def load_data(dataset_name, select_trajectory = ''):
+def load_data(
+        dataset_name, 
+        conf
+    ):
+
     if select_trajectory == '':
         select_trajectory = None
     
     if dataset_name == 'TUM_RGBD':
         from dataset.tum_rgbd import TUM
-        loader = TUM()
+        loader = TUM(conf).get_dataset()
+
     else: 
         raise NotImplementedError()
     
+
