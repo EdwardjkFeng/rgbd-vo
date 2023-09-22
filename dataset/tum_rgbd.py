@@ -4,6 +4,7 @@ Data loader fot TUM RBGD benchmark
 
 
 import sys, os
+sys.path.append("..")
 import os.path as osp
 import random
 import pickle
@@ -22,7 +23,7 @@ from .base_dataset import BaseDataset
 from .setting import DATA_PATH
 from .utils import *
 from dataset import logger
-from utils.tools import print_conf, merge_dict
+from utils.tools import print_conf
 
 
 """ 
@@ -112,7 +113,7 @@ def tum_sequences_dict():
         }
     }
 
-class TUM(BaseDataset, data.Dataset):
+class TUM(BaseDataset):
     default_conf = {
         'dataset_dir': 'TUM/',
         'select_traj': 'rgbd_dataset_freiburg1_desk',
@@ -191,8 +192,7 @@ class _Dataset(data.Dataset):
                     self.root, seq_path, 'sync_trajectory.pkl')
                 if not osp.isfile(sync_traj_file):
                     logger.info(
-                        f"Synchronized trajectory file {sync_traj_file} has \
-                            not been generated.")
+                        f"Synchronized trajectory file {sync_traj_file} has not been generated.")
                     logging.info("Generate it now ...")
                     write_sync_trajectory(self.root, seq_name)
                 
@@ -300,7 +300,7 @@ class _Dataset(data.Dataset):
         return data
 
     def __len__(self):
-        return len(self.rgb_files)
+        return len(self.rgb_seq)
 
     def _load_rgb_tensor(self, path):
         """ Load the rgb image. """
@@ -420,8 +420,8 @@ def associate(first_list, second_list, offset, max_difference):
         matches: list of matched tuples ((stamp1, data1), (stamp2, data2))
     """
 
-    first_keys = first_list.keys()
-    second_keys = second_list.keys()
+    first_keys = list(first_list)
+    second_keys = list(second_list)
     potential_matches = [(abs(a - (b + offset)), a, b)
                          for a in first_keys
                          for b in second_keys
@@ -482,8 +482,15 @@ def associate_three(
     
 
 if __name__ == '__main__':
-    
-    loader = TUM().get_dataset()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--conf', type=str)
+    args = parser.parse_args()
+
+    if args.conf:
+        conf =OmegaConf.load(args.conf)
+
+    loader = TUM(conf.data).get_dataset()[10]
 
     import torchvision.utils as torch_utils
 
@@ -491,12 +498,13 @@ if __name__ == '__main__':
                                    shuffle=False, num_workers=4)
     
     for batch in torch_loader:
-        color0, color1, depth0, depth1, transform, K, name = batch
+        item = batch
+        color0, color1, depth0, depth1, transform, calib = item['data']
         B, C, H, W = color0.shape
 
         bcolor0_img = torch_utils.make_grid(color0, nrow=4)
 
         import matplotlib.pyplot as plt
         plt.figure()
-        plt.imshow(bcolor0_img.numpy().transposse(1, 2, 0))
+        plt.imshow(bcolor0_img.numpy().transpose(1, 2, 0))
         plt.show()

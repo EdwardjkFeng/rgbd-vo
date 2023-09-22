@@ -1,3 +1,2 @@
 data:
-  name: dummy_dataset
-  images: ../data_examples/TUM/color
+  name: tum_rgbd

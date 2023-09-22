@@ -40,6 +40,9 @@ def resize(image, size: Union(int, float, Tuple, List), interp):
     elif isinstance(size, (tuple, list)):
         h_new, w_new = size
         scale = (w_new / w, h_new / h)
+    elif size is None:
+        scale = (1, 1)
+        return image, scale
     else:
         raise ValueError(f'Incorrect new size: {size}')
     mode = {
