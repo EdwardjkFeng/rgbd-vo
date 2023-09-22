@@ -103,16 +103,25 @@ def tum_sequences_dict():
                 'rgbd_dataset_freiburg3_walking_xyz',        # dynamic scene
                 'rgbd_dataset_freiburg3_long_office_household',
             ]
+        },
+
+        'default': {
+            'calib': [525.0, 525.0, 319.5, 239.5],
+            'seq': ['None',  # anything not list here
+            ]
         }
     }
 
 class TUM(BaseDataset, data.Dataset):
     default_conf = {
         'dataset_dir': 'TUM/',
-        'sequence': 'rgbd_dataset_freiburg1_desk',
+        'select_traj': 'rgbd_dataset_freiburg1_desk',
+        'category': 'test',
+        'keyframes': [1],
         'truncate_depth': True,
         'grayscale': False,
         'resize': None,
+        'add_val_dataset': False,
     }
 
     def _init(self, conf):
@@ -126,11 +135,11 @@ class TUM(BaseDataset, data.Dataset):
 class _Dataset(data.Dataset):
     def __init__(self, conf):
         super().__init__()
-        self.root = Path(DATA_PATH, conf.dataset_dir, conf.sequence)
+        self.root = Path(DATA_PATH, conf.dataset_dir)
         print(self.root)
         self.conf = conf
 
-        self.rgb_seq = []  # list(seq) or list(frame) of string (rbg image path)
+        self.image_seq = []  # list(seq) or list(frame) of string (rbg image path)
         self.timestamp = [] # empty
         self.detph_seq = [] # list(seq) of list(frame) of string (depth image path)
         self.invalid_seq = []  # empty
@@ -142,22 +151,42 @@ class _Dataset(data.Dataset):
         self.seq_acc_ids = [0]
         self.keyframes = self.conf.keyframes
 
-        self.rgb_files = sorted([f for f in os.listdir(os.path.join(self.root, 'rgb')) if f.endswith('.png')])
-        self.depth_files = sorted([f for f in os.listdir(os.path.join(self.root, 'depth')) if f.endswith('.png')])
+        # self.rgb_files = sorted([f for f in os.listdir(os.path.join(self.root, 'rgb')) if f.endswith('.png')])
+        # self.depth_files = sorted([f for f in os.listdir(os.path.join(self.root, 'depth')) if f.endswith('.png')])
+
+        if self.conf.category == 'test':
+            self._load_test()
+        elif self.conf.category in ['train', 'validation']:
+            self._load_train_val(
+                self.root, 
+                select_traj=self.conf.select_traj,
+                add_val_dataset=self.conf.add_val_dataset
+            )
+        else:
+            raise NotImplementedError()
+        
+        self.truncate_depth = self.conf.truncate_depth
 
         logger.info(f"TUM dataloader using keyframe {self.keyframes}: \
-                    {self.ids} valid frames.")
-        
+                    {self.ids} valid frames.")   
     
-    def _load(self):
+    def _load_test(self):
         tum_data = tum_sequences_dict()
+        assert(len(self.keyframes) == 1)
+        keyframe = self.conf.keyframes[0]
+        self.keyframes = [1]
+
+
         for ks, scene in tum_data.items():
             for seq_name in scene['seq']:
                 seq_path = seq_name 
+
                 if self.conf.select_traj is not None:
                     if seq_path != self.conf.select_traj: continue
                 
                 self.calib.append(scene['calib'])
+
+                # load or generate synchronized trajectory file
                 sync_traj_file = osp.join(
                     self.root, seq_path, 'sync_trajectory.pkl')
                 if not osp.isfile(sync_traj_file):
@@ -165,23 +194,67 @@ class _Dataset(data.Dataset):
                         f"Synchronized trajectory file {sync_traj_file} has \
                             not been generated.")
                     logging.info("Generate it now ...")
-                    write_sync_trajectory(self.root, '', seq_name)
+                    write_sync_trajectory(self.root, seq_name)
                 
                 with open(sync_traj_file, 'rb') as f:
-                    trajs = pickle.load(f)
-                    total_num = len(trajs)
-
-                    # TODO split train and validation sets
+                    frames = pickle.load(f)
+                    total_num = len(frames)
               
-                    images = [trajs[idx][1] for idx in range(total_num)]
-                    depths = [trajs[idx][2] for idx in range(total_num)]
-                    poses = [tq2mat(trajs[idx][0] for idx in range(total_num))]
-                    self.rgb_seq.append(images)
+                    timestamp = [
+                        osp.splitext(osp.basename(image))[0] 
+                        for image in images
+                    ]
+                    images = [frames[idx][1] for idx in range(total_num)]
+                    depths = [frames[idx][2] for idx in range(total_num)]
+                    poses = [ # extrinsic
+                        tq2mat(frames[idx][0] 
+                        for idx in range(0, total_num, keyframe))
+                    ]
+
+                    self.timestamp.append(timestamp)
+                    self.image_seq.append(images)
                     self.detph_seq.append(depths)
                     self.cam_pose_seq.append(poses)
                     self.seq_names.append(seq_path)
-                    self.ids += max(0, len(images) - max(self.keyframes))
+                    self.ids += max(0, len(images) - 1)
                     self.seq_acc_ids.append(self.ids)
+        
+        if len(self.image_seq) == 0:
+            logger.warn("The specified trajectory is not in the test set."
+                        "\nTry to support this customized dataset")
+            if osp.exists(osp.join(self.root, self.conf.select_traj)):
+                self.calib.append(tum_sequences_dict()['default']['calib'])
+                sync_traj_file = osp.join(self.root, self.conf.select_traj)
+                seq_name = seq_path = osp.basename(self.conf.select_traj)
+                if not osp.isfile(sync_traj_file):
+                    logger.info("The synchronized trajctory file {:} has not been generated.".format(seq_path))
+                    logger.info("Generate it now ...")
+                    write_sync_trajectory(self.root, self.conf.select_traj)
+                
+                with open(sync_traj_file, 'rb') as p:
+                    frames = pickle.load(p)
+                    total_num = len(frames)
+              
+                    timestamp = [
+                        osp.splitext(osp.basename(image))[0] 
+                        for image in images
+                    ]
+                    images = [frames[idx][1] for idx in range(total_num)]
+                    depths = [frames[idx][2] for idx in range(total_num)]
+                    poses = [ # extrinsic
+                        tq2mat(frames[idx][0] 
+                        for idx in range(0, total_num, keyframe))
+                    ]
+
+                    self.timestamp.append(timestamp)
+                    self.image_seq.append(images)
+                    self.detph_seq.append(depths)
+                    self.cam_pose_seq.append(poses)
+                    self.seq_names.append(seq_path)
+                    self.ids += max(0, len(images) - 1)
+                    self.seq_acc_ids.append(self.ids)
+        else:
+            raise Exception("The specified trajectory is not in the test set nor a supported customized dataset")
 
     def __getitem__(self, idx):
         seq_idx = max(np.searchsorted(self.seq_acc_ids, idx+1) - 1, 0)
@@ -190,8 +263,8 @@ class _Dataset(data.Dataset):
         this_idx = frame_idx
         next_idx = frame_idx + random.choice(self.keyframes)
 
-        color0, scale = self._load_rgb_tensor(self.rgb_seq[seq_idx][this_idx])
-        color1, _ = self._load_rgb_tensor(self.rgb_seq[seq_idx][next_idx])
+        color0, scale = self._load_rgb_tensor(self.image_seq[seq_idx][this_idx])
+        color1, _ = self._load_rgb_tensor(self.image_seq[seq_idx][next_idx])
 
         depth0 = self._load_depth_tensor(self.detph_seq[seq_idx][this_idx])
         depth1 = self._load_depth_tensor(self.detph_seq[seq_idx][next_idx])
@@ -233,7 +306,8 @@ class _Dataset(data.Dataset):
         """ Load the rgb image. """
         image = read_image(path, self.conf.grayscale) / 255.
         image, scale = resize(image, self.conf.resize, interp='bilinear')
-        return numpy_image_to_torch(image), scale
+        image = np.transpose(image, (2, 0, 1)) # channel first convention
+        return image, scale
     
     def _load_depth_tensor(self, path):
         """ Load depth:
@@ -243,8 +317,7 @@ class _Dataset(data.Dataset):
         depth, _ = resize(depth, self.conf.resize, interp='nearest')
         if self.conf.truncate_depth:
             depth = np.clip(depth, a_min=0.5, a_max=5.0) # the accurate range of kinect depth
-        return numpy_image_to_torch(depth)
-
+        return depth[None, ...] # channel first convention
 
 """
 Some utilities to work with TUM RGB-D data
@@ -259,18 +332,17 @@ def tq2mat(tq):
     return T
 
 
-def write_sync_trajectory(local_dir, dataset, subject_name):
+def write_sync_trajectory(local_dir, subject_name):
     """ Generate synchronized trajectories.
 
     Args:
         local_dir: the root of the directory
-        dataset: 
-        subject_name: the dataset category 'fr1', 'fr2', or 'fr3'
+        subject_name: 
     """
 
-    rgb_file = osp.join(local_dir, dataset, subject_name, 'rgb.txt')
-    depth_file = osp.join(local_dir, dataset, subject_name, 'depth.txt')
-    pose_file = osp.join(local_dir, dataset, subject_name, 'groundtruth.txt')
+    rgb_file = osp.join(local_dir, subject_name, 'rgb.txt')
+    depth_file = osp.join(local_dir, subject_name, 'depth.txt')
+    pose_file = osp.join(local_dir, subject_name, 'groundtruth.txt')
 
     rgb_list = read_file_list(rgb_file)
     depth_list = read_file_list(depth_file)
@@ -281,16 +353,16 @@ def write_sync_trajectory(local_dir, dataset, subject_name):
     trajectory_info = []
     for (a, b, c) in matches:
         pose = [float(x) for x in pose_list[c]]
-        rgb_file = osp.join(local_dir, dataset, subject_name, rgb_list[a][0])
-        depth_file = osp.join(local_dir, dataset, subject_name, depth_list[b][0])
+        rgb_file = osp.join(local_dir, subject_name, rgb_list[a][0])
+        depth_file = osp.join(local_dir, subject_name, depth_list[b][0])
         trajectory_info.append([pose, rgb_file, depth_file])
 
-    dataset_path = osp.join(local_dir, dataset, subject_name, 'sync_trajectory.pkl')
+    dataset_path = osp.join(local_dir, subject_name, 'sync_trajectory.pkl')
 
     with open(dataset_path, 'wb') as output:
         pickle.dump(trajectory_info, output)
     
-    txt_path = osp.join(local_dir, dataset, subject_name, 'sync_trajectory.txt')
+    txt_path = osp.join(local_dir, subject_name, 'sync_trajectory.txt')
     pickle2txt(dataset_path, txt_path)
 
 
