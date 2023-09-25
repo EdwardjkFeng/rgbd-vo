@@ -58,6 +58,21 @@ class Timers(object):
         return self.timers[key].avg()
     
 
+class NullTimer(object):
+    """ NullTimer does nothing when its methods are called. """
+    def __init__(self):
+        pass
+
+    def tic(self, *args):
+        pass
+
+    def toc(self, *args):
+        pass
+
+    def print(self, *args):
+        pass
+    
+
 def get_class(mod_name, base_path, BaseClass):
     """ Get the class object which inherits from BaseClass and is defined in 
     the module named mod_name, child of base_path. 
