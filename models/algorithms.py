@@ -9,9 +9,10 @@ import torch.nn.functional as func
 
 
 # import modules for geometry operations, e.g., projection, transformation
-
+from geometry import geometry
 # import tools for visualization
 
+from utils import tools
 
 import cv2
 import numpy as np
@@ -40,7 +41,7 @@ class TrustRegionInverseComposition(nn.Module):
         self.timers         = timers
 
 
-    def forward(self, T10, F0, F1, invD0, invD1, K, wPrior=None,
+    def forward(self, T_10, F0, F1, invD0, invD1, K, wPrior=None,
                 vis_res=False, obj_mask0=None, obj_mask1=None):
         """ Forward function. 
 
@@ -58,32 +59,83 @@ class TrustRegionInverseComposition(nn.Module):
             obj_mask1: the target object mask. Defaults to None.
 
         Returns:
-            pose: the estimated pose
+            T_10: the estimated pose
             weights: weights predicted by the convolutional m-estimator.
         """
         
+        if self.timers is None:
+            self.timers = tools.NullTimer()
+
+        B, C, H, W = F0.shape
         # pre-compute stage
+        # generate image coordinate grids
+        px, py = geometry.generate_xy_grid(B, H, W, K)
 
-            # generate image coordinate grids
+        # pre-compute Jacobian
+        self.timers.tic('pre-compute Jacobians')
+        J_F_p = self.precompute_Jacobian(invD0, F0, px, py, K) # [B, H x W, 6]
+        self.timers.toc('pre-compute Jacobians')
 
-            # pre-compute Jacobian
+        # compute warping residuals
+        self.timers.tic('compute warping residuals')
+        residuals, occ = compute_warped_residual(
+            T_10, invD0, invD1, F0, F1, px, py, K, obj_mask0, obj_mask1
+        ) # [B, 1, H, W]
+        self.timers.toc('compute warping residuals')
 
-            # compute warping residuals
+        # m-estimator predict weights
+        self.timers.tic('robust estimator')
+        weights = self.mEstimator(residuals, F0, F1, wPrior) # [B, C, H, W]
+        WJ = weights.view(B, -1, 1) * J_F_p  # [B, H x W, 6]
+        self.timers.toc('robust estimator')
 
-            # m-estimator predict weights
-
-            # pre-computer JtWJ
+        # pre-computer JtWJ
+        self.timers.tic('pre-compute JtWJ')
+        JtWJ = torch.bmm(torch.transpose(J_F_p, 1, 2), WJ)  # [B, 6, 6]
+        self.timers.toc('pre-compute JtWJ')
 
         # iteration
-
+        for idx in range(self.max_iterations):
             # solve delta = A^{-1} b
+            self.timers.tic('solve delta = A^{-1} b')
+            T_10 = self.directSolver(
+                JtWJ, torch.transpose(J_F_p, 1, 2), weights, residuals, 
+                T_10, invD0, invD1, F0, F1, K, obj_mask1
+            )
+            self.timers.toc('solve delta = A^{-1} b')
 
             # compute warping residuals
-
+            self.timers.tic('compute warping residuals')
+            residuals, occ = compute_warped_residual(
+                T_10, invD0, invD1, F0, F1, px, py, K, obj_mask0, obj_mask1
+            ) # [B, 1, H, W]
+            self.timers.toc('compute warping residuals')
 
             # visualize residuals
+            if vis_res:
+                with torch.no_grad():
+                    u_warped, v_warped, inv_z_warped = \
+                        geometry.batch_warp_inverse_depth(
+                            px, py, invD0, T_10, K
+                    )
+                    F1_1to0 = geometry.warp_features(
+                        F1, u_warped, v_warped
+                    )
+                    F_residual = display.create_mosaic(
+                        [F0, F1, F1_1to0, residuals],
+                        cmap=['NORMAL', 'NORMAL', 'NORMAL', cv2.COLORMAP_JET],
+                        order='CHW'
+                    )
+                    cv2.namedWindow(
+                        'feature-metric residuals', cv2.WINDOW_NORMAL
+                    )
+                    cv2.imshow("feature-metric residuals", F_residual)
+                    cv2.waitKey(10)
+        
+        return T_10, weights
 
-
+    def precompute_Jacobian(self, invD, F, px, py, K):
+        
 
 class TrustRegionForwardWithUncertainty(nn.Module):
     """
