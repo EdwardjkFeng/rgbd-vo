@@ -1,2 +1,4 @@
 data:
   name: tum_rgbd
+model:
+  output_dim: 16
