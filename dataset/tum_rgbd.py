@@ -199,16 +199,16 @@ class _Dataset(data.Dataset):
                 with open(sync_traj_file, 'rb') as f:
                     frames = pickle.load(f)
                     total_num = len(frames)
-              
-                    timestamp = [
-                        osp.splitext(osp.basename(image))[0] 
-                        for image in images
-                    ]
+                                
                     images = [frames[idx][1] for idx in range(total_num)]
                     depths = [frames[idx][2] for idx in range(total_num)]
                     poses = [ # extrinsic
-                        tq2mat(frames[idx][0] 
-                        for idx in range(0, total_num, keyframe))
+                        tq2mat(frames[idx][0]) 
+                        for idx in range(0, total_num, keyframe)
+                    ]
+                    timestamp = [
+                        osp.splitext(osp.basename(image))[0] 
+                        for image in images
                     ]
 
                     self.timestamp.append(timestamp)
@@ -220,8 +220,10 @@ class _Dataset(data.Dataset):
                     self.seq_acc_ids.append(self.ids)
         
         if len(self.image_seq) == 0:
-            logger.warn("The specified trajectory is not in the test set."
-                        "\nTry to support this customized dataset")
+            logger.warn("The specified trajectory {:} is not in the test set."
+                        "\nTry to support this customized dataset".format(
+                            self.conf.select_traj
+                        ))
             if osp.exists(osp.join(self.root, self.conf.select_traj)):
                 self.calib.append(tum_sequences_dict()['default']['calib'])
                 sync_traj_file = osp.join(self.root, self.conf.select_traj)
@@ -253,8 +255,8 @@ class _Dataset(data.Dataset):
                     self.seq_names.append(seq_path)
                     self.ids += max(0, len(images) - 1)
                     self.seq_acc_ids.append(self.ids)
-        else:
-            raise Exception("The specified trajectory is not in the test set nor a supported customized dataset")
+            else:
+                raise Exception("The specified trajectory is not in the test set nor a supported customized dataset")
 
     def __getitem__(self, idx):
         seq_idx = max(np.searchsorted(self.seq_acc_ids, idx+1) - 1, 0)
@@ -300,7 +302,7 @@ class _Dataset(data.Dataset):
         return data
 
     def __len__(self):
-        return len(self.rgb_seq)
+        return self.ids
 
     def _load_rgb_tensor(self, path):
         """ Load the rgb image. """
