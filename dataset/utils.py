@@ -10,7 +10,7 @@ import torchvision.transforms as transforms
 import torchvision.transforms.functional as transF
 
 
-def resize(image, size: Union(int, float, Tuple, List), interp):
+def resize(image, size: Union[int, float, Tuple, List], interp):
     """Resize an image to a fixed size, or according to max edge.
 
     Args:
