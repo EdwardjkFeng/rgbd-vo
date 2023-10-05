@@ -123,3 +123,38 @@ def skew_symmetric(v: torch.Tensor):
                       z,   o, -x,
                      -y,   x,  o], dim=-1).reshape(v.shape[:-1]+(3, 3))
     return M
+
+
+def coord_grid(H: int, W: int, **kwarg):
+    """ Create grid for pixel coordinates """
+    y, x = torch.meshgrid(
+        torch.arange(H).to(**kwarg).float(),
+        torch.arange(W).to(**kwarg).float(),
+        indexing='ij'
+    )
+    return torch.stack([x, y], dim=-1)
+
+
+def generate_xy_grid(B, H, W, K):
+    """ Generate a batch a image grid from image space to world space
+        px = (u - cx) / fx
+        py = (v - cy) / fy
+
+    Args:
+        B: batch size
+        H: height
+        W: width
+        K: camera intrinsic array [fx, fy, cx, cy]
+    
+    Returns:
+        px: u-coordinate as grid of shape (B, 1, H, W)
+        py: v-coordinate as grid of shape (B, 1, H, W)
+    """
+    fx, fy, cx, cy = K.split(1, dim=1)
+    u, v = coord_grid(H, W).unbind(dim=-1)
+    if B > 1:
+        u = u.view(1, 1, H, W).repeat(B, 1, 1, 1)
+        v = v.view(1, 1, H, W).repeat(B, 1, 1, 1)
+    px = ((u.view(B, -1) - cx) / fx).view(B, 1, H, W)
+    py = ((u.view(B, -1) - cy) / fy).view(B, 1, H, W)
+    return px, py

@@ -37,7 +37,7 @@ class Camera(TensorWrapper):
             raise NotImplementedError(model)
         
         data = np.r_[camera['width'], camera['height'],
-                     fx, fy, cx-0.5, cy-0.5, params] # TODO why -0.5?
+                     fx, fy, cx, cy, params] # TODO why -0.5?
         
         return cls(data)
         
