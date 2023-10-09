@@ -225,7 +225,6 @@ if __name__ == '__main__':
     with torch.no_grad():
         import cv2
         for batch in torch_loader:
-            cv2.waitKey(10)
             color0, color1, depth0, depth1, transform, calib = batch['data']
             B, C, H, W = color0.shape
 
@@ -250,5 +249,9 @@ if __name__ == '__main__':
             cv2.imshow("feature maps", feat_maps)
             cv2.namedWindow("RGB", cv2.WINDOW_NORMAL)
             cv2.imshow("RGB", image)
+            k = cv2.waitKey(10) & 0xFF
+            if k == ord('q'):
+                cv2.destroyAllWindows()
+                break
         cv2.waitKey(0)
         cv2.destroyAllWindows()
