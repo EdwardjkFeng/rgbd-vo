@@ -19,7 +19,7 @@ from copy import deepcopy
 import torch
 
 import config
-from geometry.geometry import batch_create_transform
+from geometry.geometry import batch_create_transform, batch_mat2Rt
 from utils.select_method import select_method
 from run_utils import check_cuda
 from dataset.dataloader import load_data
@@ -227,6 +227,8 @@ def callback(scene: "MyScene"):
         if scene.vo_type == "keyframe":
             scene.T_WK = T_WC
     else:
+        if GT_WC is not None:
+            pose_gt = batch_mat2Rt(GT_Rt)
         with torch.no_grad():
             color0 = color0.unsqueeze(dim=0)
             color1 = color1.unsqueeze(dim=0)
@@ -239,7 +241,7 @@ def callback(scene: "MyScene"):
                     color0, color1, depth0, depth1, intrins, index=scene.index
                 )
             else:
-                output = scene.network.forward(color0, color1, depth0, depth1, intrins)
+                output = scene.network.forward(color0, color1, depth0, depth1, intrins, pose=pose_gt)
         R, t = output
         if scene.is_gt_tracking:
             T_WC = GT_WC
