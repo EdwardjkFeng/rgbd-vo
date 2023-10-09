@@ -92,7 +92,7 @@ def crop(image, size, *, random=True, other=None, camera=None, return_bbox=False
 
 def read_image(path, grayscale=None):
     mode = cv2.IMREAD_GRAYSCALE if grayscale else cv2.IMREAD_COLOR
-    image = cv2.imread(str(path), mode)
+    image = cv2.imread(str(path), mode).astype(np.float32)
     if image is None:
         raise IOError(f'Could not read image at {path}.')
     if not grayscale:

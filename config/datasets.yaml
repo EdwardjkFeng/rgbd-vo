@@ -2,7 +2,7 @@ TUM_RGBD:
   jingkun-omen:
     dataset_root: '/home/jingkun/Dataset/TUM'
   
-ICL-NUIM:
+ICL_NUIM:
   jingkun-omen:
     dataset_root: '/home/jingkun/Dataset/ICL'
 
