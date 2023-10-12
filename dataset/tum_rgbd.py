@@ -118,7 +118,7 @@ def tum_sequences_dict():
 
 class TUM(BaseDataset):
     default_conf = {
-        "dataset_dir": "TUM/",
+        "dataset_dir": "TUM_RGBD_Dataset/",
         "select_traj": "rgbd_dataset_freiburg1_desk",
         "category": "test",
         "keyframes": [1],
