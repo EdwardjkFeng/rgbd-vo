@@ -9,6 +9,40 @@ import numpy as np
 import torch
 
 
+def manage_visualization():
+    """
+    Manage the visualization display according to the user's key inputs.
+
+    Parameters:
+    - idx: The current index or frame number being processed.
+
+    Returns:
+    - A boolean indicating whether to break out of the calling loop.
+    """
+
+    def close_windows():
+        cv2.destroyAllWindows()
+        return True
+
+    k = cv2.waitKey(10) & 0xFF
+
+    if k == ord("q"):
+        return close_windows()  # Indicate to break out of the calling loop
+
+    if k == ord("p"):
+        # Pause the visualization
+        global_pause_signal = True
+        while True:
+            # Wait indefinitely for the user to press 'c' to continue
+            k = cv2.waitKey(0) & 0xFF
+            if k == ord("s"):
+                break
+            elif k == ord("q"):
+                return close_windows()
+
+    return False  # Continue the calling loop
+
+
 def convert_flow_for_display(flow):
     """Converts a 2D image (e.g. flow) to rgb
 

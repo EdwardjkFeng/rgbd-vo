@@ -546,7 +546,8 @@ class LeastSquareTracking(nn.Module):
                         mest_img = osp.join(mest_folder, img_index_png)
                         check_directory(mest_img)
                         cv2.imwrite(mest_img, robust_w)
-                cv2.waitKey(1)
+                # cv2.waitKey(1)
+                visualize.manage_visualization()
 
             if logger is not None:
                 if self.training:

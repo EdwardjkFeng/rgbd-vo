@@ -146,7 +146,7 @@ class TrustRegionInverseComposition(nn.Module):
                     )
                     cv2.namedWindow("feature-metric residuals", cv2.WINDOW_NORMAL)
                     cv2.imshow("feature-metric residuals", F_residual)
-                    cv2.waitKey(10)
+                    visualize.manage_visualization()
 
         return T_10, weights
 
