@@ -26,11 +26,11 @@ def get_datasets_path(which_dataset):
 
 
 TUM_DATASET_DIR = get_datasets_path("TUM_RGBD")
-COFUSION_DIR = get_datasets_path("CoFusion")
-ICL_DIR = get_datasets_path("ICL_NUIM")
-ETH3D_DATASET_DIR = get_datasets_path("ETH3D")
-OXFORD_DIR = get_datasets_path("Oxford_multimotion")
-TARTAN_DATASET_DIR = get_datasets_path("TartanAir")
+# COFUSION_DIR = get_datasets_path("CoFusion")
+# ICL_DIR = get_datasets_path("ICL_NUIM")
+# ETH3D_DATASET_DIR = get_datasets_path("ETH3D")
+# OXFORD_DIR = get_datasets_path("Oxford_multimotion")
+# TARTAN_DATASET_DIR = get_datasets_path("TartanAir")
 
 
 def load_data(dataset_name, conf):

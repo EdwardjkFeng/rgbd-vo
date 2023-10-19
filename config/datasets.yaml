@@ -1,6 +1,9 @@
 TUM_RGBD:
   jingkun-omen:
     dataset_root: '/home/jingkun/Dataset/TUM_RGBD_Dataset'
+
+  jingkun-ThinkPad-P52:
+    dataset_root: '/home/jingkun/Dataset/TUM_RGBD_Dataset'
   
 ICL_NUIM:
   jingkun-omen:
