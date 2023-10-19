@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from models.algorithms import feature_gradient
+
 
 def so3exp_map(w, eps: float = 1e-7) -> torch.Tensor:
     """Compute rotation matrices from batched twists.
@@ -35,14 +37,18 @@ def skew_symmetric(v: torch.Tensor):
     return M
 
 
-def coord_grid(H: int, W: int, **kwarg):
+def coord_grid(H: int, W: int, B=None, **kwarg):
     """Create grid for pixel coordinates"""
     y, x = torch.meshgrid(
         torch.arange(H).to(**kwarg).float(),
         torch.arange(W).to(**kwarg).float(),
         indexing="ij",
     )
-    return torch.stack([x, y], dim=-1)
+    
+    if B is not None:
+        x = x.view(1, 1, H, W).contiguous().expand(B, -1, -1, -1)
+        y = y.view(1, 1, H, W).contiguous().expand(B, -1, -1, -1)
+    return x, y
 
 
 def generate_xy_grid(B, H, W, K):
@@ -61,12 +67,11 @@ def generate_xy_grid(B, H, W, K):
         py: v-coordinate as grid of shape (B, 1, H, W)
     """
     fx, fy, cx, cy = K.split(1, dim=1)
-    u, v = coord_grid(H, W, device=K.device).unbind(dim=-1)
-    if B > 1:
-        u = u.view(1, 1, H, W).repeat(B, 1, 1, 1)
-        v = v.view(1, 1, H, W).repeat(B, 1, 1, 1)
+    u, v = coord_grid(H, W, B, device=K.device)
+
     px = ((u.view(B, -1) - cx) / fx).view(B, 1, H, W)
-    py = ((u.view(B, -1) - cy) / fy).view(B, 1, H, W)
+    py = ((v.view(B, -1) - cy) / fy).view(B, 1, H, W)
+
     return px, py
 
 
@@ -190,6 +195,7 @@ def warp_features(F, u, v):
 
     B, _, H, W = F.shape
 
+    # Noramlize image coordinate map
     u_norm = u / ((W - 1) / 2) - 1
     v_norm = v / ((H - 1) / 2) - 1
     uv_grid = torch.cat((u_norm.view(B, H, W, 1), v_norm.view(B, H, W, 1)), dim=3)
@@ -269,3 +275,39 @@ def batch_mat2Rt(T):
         return R, t
     else:
         return R[None], t[None]
+
+
+def compute_vertex(depth, px, py):
+    B, _, H, W = px.shape
+    I = torch.ones((B, 1, H, W)).to(depth)
+    x_hom = torch.cat((px, py, I), dim=1)
+
+    vertex = x_hom * depth
+    
+    return vertex
+
+
+def compute_normal(vertex_map):
+    """Calculate the normal map from a vertex map
+
+    Args:
+        vertex_map: the inpute vertex map
+    """
+    B, C, H, W = vertex_map.shape
+    img_dx, img_dy = feature_gradient(vertex_map, normalize_gradient=False)
+
+    normal = torch.cross(
+        img_dx.view(B, 3, -1).permute(0, 2, 1).contiguous().view(-1, 3),
+        img_dy.view(B, 3, -1).permute(0, 2, 1).contiguous().view(-1, 3)
+    )
+    normal = normal.view(B, H*W, 3).permute(0, 2, 1)
+
+    mag = torch.norm(normal, p=2, dim=1, keepdim=True)
+    normal = normal / (mag + 1e-8)
+
+    depth = vertex_map[:, 2:3, :, :]
+    invalid_mask = (depth == depth.min()) | (depth == depth.max())
+    zero_normal = torch.zeros_like(normal)
+    normal = torch.where(invalid_mask.view(B, 1, -1).expand(B, 3, H*W), zero_normal, normal)
+
+    return normal.view(B, C, H, W)
