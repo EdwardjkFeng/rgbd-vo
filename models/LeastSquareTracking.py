@@ -13,13 +13,14 @@ import cv2
 
 from models.submodules import color_normalize
 
-# from models.algorithms import TrustRegionWUncertainty as TrustRegionU
+from models.algorithms import TrustRegionForwardWithUncertainty as TrustRegionU
 from models.algorithms import TrustRegionInverseComposition as TrustRegion
 # from models.algorithms import TrustRegionInverseWUncertainty as TR_U_IC
 # from models.algorithms import Inverse_ICP as TR_ICP
 # from models.algorithms import FeaturePyramid
 from models.pyramid import ImagePyramids
-from models.algorithms import DirectSolverNet, DeepRobustEstimator
+from models.algorithms import DirectSolverNet
+from models.deep_estimator import DeepRobustEstimator
 # from models.algorithms import SFMPoseNet, PoseNet
 # from models.algorithms import ScaleNet
 from utils import visualize
@@ -220,39 +221,43 @@ class LeastSquareTracking(nn.Module):
             self.tr_update0 = TrustRegion(max_iter_per_pyr,
                 mEst_func   = mEst_funcs[0],
                 solver_func = solver_funcs[0],
-                timers      = timers)
+                timers      = timers,
+                combine_icp=self.combine_icp,)
             self.tr_update1 = TrustRegion(max_iter_per_pyr,
                 mEst_func   = mEst_funcs[1],
                 solver_func = solver_funcs[1],
-                timers      = timers)
+                timers      = timers,
+                combine_icp=self.combine_icp,)
             self.tr_update2 = TrustRegion(max_iter_per_pyr,
                 mEst_func   = mEst_funcs[2],
                 solver_func = solver_funcs[2],
-                timers      = timers)
+                timers      = timers,
+                combine_icp=self.combine_icp,)
             self.tr_update3 = TrustRegion(max_iter_per_pyr,
                 mEst_func   = mEst_funcs[3],
                 solver_func = solver_funcs[3],
-                timers      = timers)
+                timers      = timers,
+                combine_icp=self.combine_icp,)
         ## TrustRegionWUncertainty
-        # elif uncertainty_type != 'None' and direction == 'forward':
-        #     print("=> Deep forward compositional algorithm, with uncertainty of", uncertainty_type)
-        #     self.track_type = 'U_FC'
-        #     self.tr_update0 = TrustRegionU(max_iter_per_pyr,
-        #                                    mEst_func=mEst_funcs[0],
-        #                                    solver_func=solver_funcs[0],
-        #                                    timers=timers)
-        #     self.tr_update1 = TrustRegionU(max_iter_per_pyr,
-        #                                    mEst_func=mEst_funcs[1],
-        #                                    solver_func=solver_funcs[1],
-        #                                    timers=timers)
-        #     self.tr_update2 = TrustRegionU(max_iter_per_pyr,
-        #                                    mEst_func=mEst_funcs[2],
-        #                                    solver_func=solver_funcs[2],
-        #                                    timers=timers)
-        #     self.tr_update3 = TrustRegionU(max_iter_per_pyr,
-        #                                    mEst_func=mEst_funcs[3],
-        #                                    solver_func=solver_funcs[3],
-        #                                    timers=timers)
+        elif uncertainty_type == 'None' and direction == 'forward':
+            print("=> Deep forward compositional algorithm, with uncertainty of", uncertainty_type)
+            self.track_type = 'U_FC'
+            self.tr_update0 = TrustRegionU(max_iter_per_pyr,
+                                           mEst_func=mEst_funcs[0],
+                                           solver_func=solver_funcs[0],
+                                           timers=timers)
+            self.tr_update1 = TrustRegionU(max_iter_per_pyr,
+                                           mEst_func=mEst_funcs[1],
+                                           solver_func=solver_funcs[1],
+                                           timers=timers)
+            self.tr_update2 = TrustRegionU(max_iter_per_pyr,
+                                           mEst_func=mEst_funcs[2],
+                                           solver_func=solver_funcs[2],
+                                           timers=timers)
+            self.tr_update3 = TrustRegionU(max_iter_per_pyr,
+                                           mEst_func=mEst_funcs[3],
+                                           solver_func=solver_funcs[3],
+                                           timers=timers)
         ## TrustRegionInverseWUncertainty
         # elif uncertainty_type != 'None' and direction == 'inverse':
         #     print("=> Deep Inverse Compositional algorithm, with uncertainty of", uncertainty_type)
@@ -356,14 +361,16 @@ class LeastSquareTracking(nn.Module):
         if self.track_type == 'U_FC':
             output3 = self.tr_update3(poseI, x0[3], x1[3], dpt0_pyr[3], dpt1_pyr[3], K3,
                                       sigma0=sigma0[3], sigma1=sigma1[3], wPrior=prior_W, vis_res=self.vis_res,
-                                      obj_mask1=obj_mask1_pyr[3])
+                                      )
         elif self.track_type == 'U_IC':
             output3 = self.tr_update3(poseI, x0[3], x1[3], inv_d0[3], inv_d1[3], K3,
                                       sigma0=sigma0[3], sigma1=sigma1[3], wPrior=prior_W, vis_res=self.vis_res,
                                       depth0=dpt0_pyr[3], depth1=dpt1_pyr[3],
                                       obj_mask0=obj_mask0_pyr[3], obj_mask1=obj_mask1_pyr[3])
         elif self.track_type == 'IC':
-            output3 = self.tr_update3(poseI, x0[3], x1[3], inv_d0[3], inv_d1[3], K3, prior_W, vis_res=self.vis_res,
+            output3 = self.tr_update3(poseI, x0[3], x1[3], inv_d0[3], inv_d1[3], K3, 
+            dpt0_pyr[3], dpt1_pyr[3],
+            prior_W, vis_res=self.vis_res,
                                       obj_mask0=obj_mask0_pyr[3], obj_mask1=obj_mask1_pyr[3])
         elif self.track_type == 'ICP':
             output3 = self.tr_update3(poseI, dpt0_pyr[3], dpt1_pyr[3], K3, prior_W, vis_res=self.vis_res,
@@ -380,14 +387,16 @@ class LeastSquareTracking(nn.Module):
         if self.track_type == 'U_FC':
             output2 = self.tr_update2(pose3, x0[2], x1[2], dpt0_pyr[2], dpt1_pyr[2], K2,
                                       sigma0=sigma0[2], sigma1=sigma1[2], wPrior=mEst_W3, vis_res=self.vis_res,
-                                      obj_mask1=obj_mask1_pyr[2])
+                                      )
         elif self.track_type == 'U_IC':
             output2 = self.tr_update2(pose3, x0[2], x1[2], inv_d0[2], inv_d1[2], K2,
                                       sigma0=sigma0[2], sigma1=sigma1[2], wPrior=mEst_W3, vis_res=self.vis_res,
                                       depth0=dpt0_pyr[2], depth1=dpt1_pyr[2],
                                       obj_mask0=obj_mask0_pyr[2], obj_mask1=obj_mask1_pyr[2])
         elif self.track_type == 'IC':
-            output2 = self.tr_update2(pose3, x0[2], x1[2], inv_d0[2], inv_d1[2], K2, wPrior=mEst_W3, vis_res=self.vis_res,
+            output2 = self.tr_update2(pose3, x0[2], x1[2], inv_d0[2], inv_d1[2], K2, 
+            dpt0_pyr[2], dpt1_pyr[2],
+            wPrior=mEst_W3, vis_res=self.vis_res,
                                       obj_mask0=obj_mask0_pyr[2], obj_mask1=obj_mask1_pyr[2])
         elif self.track_type == 'ICP':
             output2 = self.tr_update2(pose3, dpt0_pyr[2], dpt1_pyr[2], K2, wPrior=mEst_W3, vis_res=self.vis_res,
@@ -404,14 +413,14 @@ class LeastSquareTracking(nn.Module):
         if self.track_type == 'U_FC':
             output1 = self.tr_update1(pose2, x0[1], x1[1], dpt0_pyr[1], dpt1_pyr[1], K1,
                                       sigma0=sigma0[1], sigma1=sigma1[1], wPrior=mEst_W2, vis_res=self.vis_res,
-                                      obj_mask1=obj_mask1_pyr[1])
+                                      )
         elif self.track_type == 'U_IC':
             output1 = self.tr_update1(pose2, x0[1], x1[1], inv_d0[1], inv_d1[1], K1,
                                       sigma0=sigma0[1], sigma1=sigma1[1], wPrior=mEst_W2, vis_res=self.vis_res,
                                       depth0=dpt0_pyr[1], depth1=dpt1_pyr[1],
                                       obj_mask0=obj_mask0_pyr[1], obj_mask1=obj_mask1_pyr[1])
         elif self.track_type == 'IC':
-            output1 = self.tr_update1(pose2, x0[1], x1[1], inv_d0[1], inv_d1[1], K1,
+            output1 = self.tr_update1(pose2, x0[1], x1[1], inv_d0[1], inv_d1[1], K1, dpt0_pyr[1], dpt1_pyr[1],
                                       wPrior=mEst_W2, vis_res=self.vis_res,
                                       obj_mask0=obj_mask0_pyr[1], obj_mask1=obj_mask1_pyr[1])
         elif self.track_type == 'ICP':
@@ -428,15 +437,15 @@ class LeastSquareTracking(nn.Module):
         if self.track_type == 'U_FC':
             output0 = self.tr_update0(pose1, x0[0], x1[0], dpt0_pyr[0], dpt1_pyr[0], K,
                                       sigma0=sigma0[0], sigma1=sigma1[0], wPrior=mEst_W1, vis_res=self.vis_res,
-                                      obj_mask1=obj_mask1_pyr[0])
+                                      )
         elif self.track_type == 'U_IC':
             output0 = self.tr_update0(pose1, x0[0], x1[0], inv_d0[0], inv_d1[0], K,
                                       sigma0=sigma0[0], sigma1=sigma1[0], wPrior=mEst_W1, vis_res=True,
                                       depth0=dpt0_pyr[0], depth1=dpt1_pyr[0],
                                       obj_mask0=obj_mask0_pyr[0], obj_mask1=obj_mask1_pyr[0])
         elif self.track_type == 'IC':
-            output0 = self.tr_update0(pose1, x0[0], x1[0], inv_d0[0], inv_d1[0], K,
-                                      wPrior=mEst_W1, vis_res=self.vis_res,
+            output0 = self.tr_update0(pose1, x0[0], x1[0], inv_d0[0], inv_d1[0], K, dpt0_pyr[0], dpt1_pyr[0],
+                                      wPrior=mEst_W1, vis_res=True,
                                       obj_mask0=obj_mask0_pyr[0], obj_mask1=obj_mask1_pyr[0])
         elif self.track_type == 'ICP':
             output0 = self.tr_update0(pose1, dpt0_pyr[0], dpt1_pyr[0], K, wPrior=mEst_W1, vis_res=self.vis_res,
