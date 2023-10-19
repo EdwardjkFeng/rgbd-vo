@@ -389,7 +389,7 @@ def main(options):
         "keyframes": [1],
         "truncate_depth": True,
         "grayscale": False,
-        "resize": 0.25,
+        "resize": 1.,
         "add_val_dataset": False,
     }
 

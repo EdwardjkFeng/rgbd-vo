@@ -11,16 +11,16 @@ python -B experiment/rgbd_vo.py \
 --feature_extract conv \
 --uncertainty laplacian \
 --uncertainty_channel 1 \
---direction inverse \
+--direction forward \
 --init_pose sfm_net \
 --train_init_pose \
 --multi_hypo prob_fuse \
 --remove_tru_sigma \
 --checkpoint checkpoint/dynamic_finetune_checkpoint_epoch39.pth.tar \
 --vo RGB \
---image_resize 0.25 \
+--image_resize 1 \
 --time \
---vis_feat
+--vis_feat \
 
 # --combine_ICP \
 
