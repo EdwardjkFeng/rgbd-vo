@@ -19,14 +19,14 @@ def color_normalize(color):
 
 
 def convLayer(
+    batchNorm,
     in_planes,
     out_planes,
-    mode="2d",
-    batchNorm=False,
     kernel_size=3,
     stride=1,
     dilation=1,
     bias=False,
+    mode="2d",
 ):
     """A wrapper of convolution-batchnorm-ReLU module"""
     conv = {"1d": nn.Conv1d, "2d": nn.Conv2d}

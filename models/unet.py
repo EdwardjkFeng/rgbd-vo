@@ -210,7 +210,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.conf:
-        conf =OmegaConf.load(args.conf)
+        conf = OmegaConf.load(args.conf)
 
     # loader = [TUM(conf.data).get_dataset()[i] for i in range(3)]
     loader = TUM(conf.data).get_dataset()
