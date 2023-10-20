@@ -34,6 +34,7 @@ class TrustRegionInverseComposition(nn.Module):
         mEst_func=None,
         solver_func=None,
         timers=None,
+        combine_icp=False,
     ):
         super().__init__()
 
@@ -41,6 +42,10 @@ class TrustRegionInverseComposition(nn.Module):
         self.mEstimator = mEst_func
         self.directSolver = solver_func
         self.timers = timers
+        self.combine_icp = combine_icp
+
+        if self.timers is None:
+            self.timers = NullTimer()
 
     def forward(
         self,
@@ -50,6 +55,8 @@ class TrustRegionInverseComposition(nn.Module):
         invD0,
         invD1,
         K,
+        depth0 = None,
+        depth1 = None,
         wPrior=None,
         vis_res=False,
         obj_mask0=None,
@@ -75,13 +82,24 @@ class TrustRegionInverseComposition(nn.Module):
             weights: weights predicted by the convolutional m-estimator.
         """
 
-        if self.timers is None:
-            self.timers = NullTimer()
 
         B, C, H, W = F0.shape
         # pre-compute stage
         # generate image coordinate grids
         px, py = geometry.generate_xy_grid(B, H, W, K)
+
+        if self.combine_icp:
+            assert depth0 is not None and depth1 is not None
+            self.timers.tic("compute vertex and normal")
+            vertex0 = geometry.compute_vertex(depth0, px, py)
+            vertex1 = geometry.compute_vertex(depth1, px, py)
+            normal0 = geometry.compute_normal(vertex0)
+            normal1 = geometry.compute_normal(vertex1)
+            self.timers.toc("compute vertex and normal")
+
+        # #TODO
+        # self.timers.tic("compute pre-computable Jacobian components")
+        # self.timers.toc("compute pre-computable Jacobian components")
 
         # pre-compute Jacobian
         self.timers.tic("pre-compute Jacobians")
@@ -106,13 +124,30 @@ class TrustRegionInverseComposition(nn.Module):
         JtWJ = torch.bmm(torch.transpose(J_F_p, 1, 2), WJ)  # [B, 6, 6]
         self.timers.toc("pre-compute JtWJ")
 
+        J = J_F_p
+
         # iteration
         for idx in range(self.max_iterations):
+            if self.combine_icp:
+                self.timers.tic("compute ICP residuals and Jacobians")
+                icp_res, icp_J, icp_occ = self.compute_ICP_residuals_Jacobian(vertex0, vertex1, normal0, normal1, T_10, K, obj_mask0, obj_mask1)
+                self.timers.toc("compute ICP residuals and Jacobians")
+
+                w_icp = 1
+                icp_res = w_icp * icp_res
+                icp_J = w_icp * icp_J
+
+                icp_WJ = weights.view(B, -1, 1) * icp_J
+                icp_JtWJ = torch.bmm(torch.transpose(icp_J, 1, 2), icp_WJ)
+                JtWJ = JtWJ + icp_JtWJ
+                residuals = icp_res + residuals
+                J = J_F_p + icp_J
+
             # solve delta = A^{-1} b
             self.timers.tic("solve delta = A^{-1} b")
             T_10 = self.directSolver(
                 JtWJ,
-                torch.transpose(J_F_p, 1, 2),
+                torch.transpose(J, 1, 2),
                 weights,
                 residuals,
                 T_10,
@@ -128,22 +163,32 @@ class TrustRegionInverseComposition(nn.Module):
             # compute warping residuals
             self.timers.tic("compute warping residuals")
             residuals, occ = compute_warped_residual(
-                T_10, invD0, invD1, F0, F1, px, py, K, obj_mask0, obj_mask1
+                T_10, invD0, invD1, F0, F1, px, py, K, obj_mask1=obj_mask1
             )  # [B, 1, H, W]
             self.timers.toc("compute warping residuals")
 
             # visualize residuals
             if vis_res:
                 with torch.no_grad():
-                    u_warped, v_warped, _ = geometry.batch_warp_inverse_depth(
+                    u_warped, v_warped, inv_z_warped = geometry.batch_warp_inverse_depth(
                         px, py, invD0, T_10, K
                     )
                     F1_1to0 = geometry.warp_features(F1, u_warped, v_warped)
-                    F_residual = visualize.create_mosaic(
-                        [F0, F1, F1_1to0, residuals],
-                        cmap=["NORMAL", "NORMAL", "NORMAL", cv2.COLORMAP_JET],
-                        order="CHW",
-                    )
+                    if self.combine_icp:
+                        F_residual = visualize.create_mosaic(
+                            [F0, F1, F1_1to0, residuals, icp_res],
+                            cmap=["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL"],
+                            order="CHW",
+                            normalize=True,
+                        )
+                    else:
+                        print(residuals.max(), residuals.min())
+                        F_residual = visualize.create_mosaic(
+                            [F0, F1, F1_1to0, residuals],
+                            cmap=["NORMAL", "NORMAL", "NORMAL", "NORMAL"],
+                            order='CHW',
+                            normalize=True,
+                        )
                     cv2.namedWindow("feature-metric residuals", cv2.WINDOW_NORMAL)
                     cv2.imshow("feature-metric residuals", F_residual)
                     visualize.manage_visualization()
@@ -208,6 +253,57 @@ class TrustRegionInverseComposition(nn.Module):
 
         return loss
 
+    def compute_ICP_residuals_Jacobian(self, vertex0, vertex1, normal0, normal1, pose10, K, obj_mask0=None, obj_mask1=None):
+        R, t = pose10
+        B, C, H, W = vertex0.shape
+
+        rot_vertex0_to1 = torch.bmm(R, vertex0.view(B, 3, H*W))
+        vertex0_to1 = rot_vertex0_to1 + t.view(B, 3, 1).expand(B, 3, H*W)
+        # normal0_to1 = torch.bmm(R, normal0.view(B, 3, H * W))
+
+        fx, fy, cx, cy = torch.split(K, 1, dim=1)
+        x_, y_, s_ = torch.split(vertex0_to1, 1, dim=1)
+        u_ = (x_ / s_).view(B, -1) * fx + cx
+        v_ = (y_ / s_).view(B, -1) * fy + cy
+
+        inviews = (u_ > 0) & (u_ < W-1) & (v_ > 0) & (v_ < H-1)
+
+        # # interpolation-version
+        r_vertex1 = geometry.warp_features(vertex1, u_, v_)
+        r_normal1 = geometry.warp_features(normal1, u_, v_)
+
+        diff = vertex0_to1 - r_vertex1.view(B, 3, H * W)
+        # normal_diff = (normal0_to1 * r_normal1.view(B, 3, H * W)).sum(dim=1, keepdim=True)
+
+        # occlusion
+        occ = ~inviews.view(B,1,H,W) | (diff.view(B,3,H,W).norm(p=2, dim=1, keepdim=True) > 0.1) #| \
+        if obj_mask0 is not None:
+            bg_mask0 = ~obj_mask0
+            occ = occ | (bg_mask0.view(B, 1, H, W))
+        if obj_mask1 is not None:
+            obj_mask1_r = geometry.warp_features(obj_mask1.float(), u_, v_) > 0
+            bg_mask1 = ~obj_mask1_r
+            occ = occ | (bg_mask1.view(B, 1, H, W))
+
+        # point-to-plane residuals
+        res = (r_normal1.view(B, 3, H*W)) * diff
+        res = res.sum(dim=1, keepdim=True).view(B,1,H,W)  # [B,1,H,W]
+        # inverse point-to-plane jacobians
+        NtC10 = torch.bmm(r_normal1.view(B,3,-1).permute(0,2,1), R)  # [B, H*W, 3]
+        J_rot = torch.bmm(NtC10.view(-1,3).unsqueeze(dim=1),  #[B*H*W,1,3]
+                           geometry.batch_skew(vertex0.view(B,3,-1).permute(0, 2, 1).contiguous().view(-1, 3))).squeeze()  # [B*H*W, 3]
+        J_trs = -NtC10.view(-1,3)  # [B*H*W, 3]
+
+        # compose jacobians
+        J_F_p = torch.cat((J_rot, J_trs), dim=-1)  # follow the order of [rot, trs]  [B*H*W, 6]
+        J_F_p = J_F_p.view(B, -1, 6)  # [B, 1, HXW, 6]
+
+        # follow the conversion of inversing the jacobian
+        J_F_p = - J_F_p
+
+        res[occ] = 1e-6
+
+        return res, J_F_p, occ
 
 class TrustRegionForwardWithUncertainty(nn.Module):
     """
@@ -236,7 +332,10 @@ class TrustRegionForwardWithUncertainty(nn.Module):
         self.max_iterations = max_iter
         self.mEstimator = mEst_func
         self.directSolver = solver_func
-        self.timres = timers
+        self.timers = timers
+
+        if self.timers is None:
+            self.timers = NullTimer()
 
     def forward(
         self, T_10, F0, F1, invD0, invD1, K, sigma0, sigma1, wPrior=None, vis_res=True
@@ -261,19 +360,103 @@ class TrustRegionForwardWithUncertainty(nn.Module):
             weights: weights predicted by the convolutional m-estimator.
         """
 
+        if sigma0 is None or sigma1 is None:
+            assert sigma0 is not None and sigma1 is not None
+
+        B, C, H, W = F0.shape
+
+        px, py = geometry.generate_xy_grid(B, H, W, K)
+
         # Iteration
+        for idx in range(self.max_iterations):
 
-        # compute warping residuals
+            # compute warping residuals
+            self.timers.tic("compute warping residuals")
+            res, crd, warped_invD0, occ = self.compute_warped_residual(
+                T_10, F0, F1, invD0, invD1, px, py, K
+            )
+            self.timers.toc("compute warping residuals")
 
-        # visualize feature-metric residuals
+            # visualize feature-metric residuals
+            if vis_res:
+                with torch.no_grad():
+                    feat_residual = visualize.create_mosaic(
+                        # [normalized_res, res, uncertainty], 
+                        # cmap=[
+                        #     cv2.COLORMAP_JET, 
+                        #     cv2.COLORMAP_JET, 
+                        #     cv2.COLORMAP_JET
+                        # ],
+                        [res],
+                        cmap=[cv2.COLORMAP_JET],
+                        order='CHW')
+                    cv2.namedWindow("feature-metric residuals", cv2.WINDOW_NORMAL)
+                    cv2.imshow("feature-metric residuals", feat_residual)
+                    cv2.waitKey(10)
 
-        # compute Jacobian
+            # compute Jacobian
+            self.timers.tic("compute jacobian")
+            J_p = - self.compute_Jacobian(
+                T_10, invD0, F1, px, py, crd, K
+            )
+            self.timers.toc("compute jacobian")
 
-        # robust estimator perdicts weights
+            # robust estimator perdicts weights
+            self.timers.tic("robust estimator")
+            weights = self.mEstimator(res, F0, F1, wPrior)  # [B, C, H, W]
+            # WJ = weights.view(B, -1, 1) * J_p  # [B, H x W, 6]
+            self.timers.toc("robust estimator")
 
-        # compute JtWJ
+            # compute JtWJ
+            Jt = torch.transpose(J_p, 1, 2)
+            # JtWJ = torch.bmm(Jt, WJ)
+            JtWJ = torch.bmm(Jt, J_p)
+            
+            # solve delta = A^{-1} b
+            T_10 = self.directSolver(
+                JtWJ, Jt, weights, res, T_10, invD0, invD1, F0, F1, K
+            )
 
-        # solve delta = A^{-1} b
+        return T_10, weights
+
+    def compute_Jacobian(self, T10, invD, F, px, py, crd, K):
+        JF_x, JF_y = feature_gradient(F)  # [B, 1, H, W], [B, 1, H, W]
+        u_warped, v_warped = crd.unbind(dim=1)
+        JF_x = geometry.warp_features(JF_x, u_warped, v_warped)
+        JF_y = geometry.warp_features(JF_y, u_warped, v_warped)
+
+        Jx_p, Jy_p = compute_Jacobian_warping(
+            invD, K, px, py, T10
+        )  # [B, HxW, 6], [B, HxW, 6]
+        J_F_p = compute_Jacobian_dFdp(JF_x, JF_y, Jx_p, Jy_p)  # [B, HxW, 6]
+
+        return J_F_p
+
+    def compute_warped_residual(self, pose10, F0, F1, invD0, invD1, px, py, K, obj_mask0=None, obj_mask1=None):
+        B, C, H, W = F0.shape
+
+        u_warped, v_warped, inv_z_warped = geometry.batch_warp_inverse_depth(
+            px, py, invD0, pose10, K
+        )
+        F1_1to0 = geometry.warp_features(F1, u_warped, v_warped)
+        crd = torch.cat((u_warped, v_warped), dim=1)
+        occ = geometry.check_occ(inv_z_warped, invD1, crd)
+
+        residuals = F1_1to0 - F0
+
+        # determine whehter the object is in-view
+        if obj_mask0 is not None:
+            bg_mask0 = -obj_mask0
+            occ = occ | (bg_mask0.view(B, 1, H, W))
+        if obj_mask1 is not None:
+            # determine wehter the object is in-view
+            obj_mask1_r = geometry.warp_features(obj_mask1.float(), u_warped, v_warped) > 0
+            bg_mask1 = ~obj_mask1_r
+            occ = occ | (bg_mask1.view(B, 1, H, W))
+
+        residuals[occ.expand(B, C, H, W)] = 1e-3
+
+        return residuals, crd, inv_z_warped, occ
 
 
 class TrustRegionICWithUncertainty(nn.Module):
@@ -355,75 +538,6 @@ class TrustRegionICWithUncertainty(nn.Module):
         # update pose
 
 
-class DeepRobustEstimator(nn.Module):
-    """The M-estimator
-
-    When use estimator_type = 'MultiScale2w', it is the proposed convolutional M-estimator
-    """
-
-    def __init__(self, estimator_type):
-        super(DeepRobustEstimator, self).__init__()
-
-        if estimator_type == "MultiScale2w":
-            self.D = 4
-        elif estimator_type == "None":
-            self.mEst_func = self.__constant_weight
-            self.D = -1
-        else:
-            raise NotImplementedError()
-
-        if self.D > 0:
-            self.net = nn.Sequential(
-                conv(True, self.D, 16, 3, dilation=1),
-                conv(True, 16, 32, 3, dilation=2),
-                conv(True, 32, 64, 3, dilation=4),
-                conv(True, 64, 1, 3, dilation=1),
-                nn.Sigmoid(),
-            )
-            initialize_weights(self.net)
-        else:
-            self.net = None
-
-    def forward(self, residual, x0, x1, ws=None):
-        """
-        :param residual, the residual map
-        :param x0, the feature map of the template
-        :param x1, the feature map of the image
-        :param ws, the initial weighted residual
-        """
-        if self.D == 1:  # use residual only
-            context = residual.abs()
-            w = self.net(context)
-        elif self.D == 4:
-            B, C, H, W = residual.shape
-            wl = func.interpolate(ws, (H, W), mode="bilinear", align_corners=True)
-            context = torch.cat((residual.abs(), x0, x1, wl), dim=1)
-            w = self.net(context)
-        elif self.D < 0:
-            w = self.mEst_func(residual)
-
-        return w
-
-    def __weight_Huber(self, x, alpha=0.02):
-        """weight function of Huber loss:
-        refer to P. 24 w(x) at
-        https://members.loria.fr/moberger/Enseignement/Master2/Documents/ZhangIVC-97-01.pdf
-
-        Note this current implementation is not differentiable.
-        """
-        abs_x = torch.abs(x)
-        linear_mask = abs_x > alpha
-        w = torch.ones(x.shape).type_as(x)
-
-        if linear_mask.sum().item() > 0:
-            w[linear_mask] = alpha / abs_x[linear_mask]
-        return w
-
-    def __constant_weight(self, x):
-        """mimic the standard least-square when weighting function is constant"""
-        return torch.ones(x.shape).type_as(x)
-
-
 class DirectSolverNet(nn.Module):
     # the enum types for direct solver
     SOLVER_NO_DAMPING = 0
@@ -466,7 +580,8 @@ class DirectSolverNet(nn.Module):
         B = JtJ.shape[0]
 
         wR = (weights * R).view(B, -1, 1)  # [B, CXHXW, 1]
-        JtR = torch.bmm(Jt, wR)  # [B, 6, 1]
+        # JtR = torch.bmm(Jt, wR)  # [B, 6, 1]
+        JtR = torch.bmm(Jt, R.view(B, -1, 1))
 
         if self.type == self.SOLVER_NO_DAMPING:
             # Add a small diagonal damping. Without it, the training becomes quite unstable
@@ -671,27 +786,14 @@ def compute_Jacobian_dFdp(JF_x, JF_y, Jx_p, Jy_p):
 
 
 def compute_Jacobian_warping(invD, K, px, py, pose=None):
-    """Compute teh Jacobian matrix of the warped (x, y) w.r.t. the inverse depth (linearized at origin)
-
-    Args:
-        invD: the inverse depth
-        K: the intrinsic calibration
-        px: the pixel x map
-        py: the pixel y map
-        pose: the relative transformation. Defaults to None.
-
-    Returns:
-        the warping Jacobian in x, y direction
-    """
     B, C, H, W = invD.shape
     assert C == 1
 
     if pose is not None:
         x_y_invz = torch.cat((px, py, invD), dim=1)
         R, t = pose
-        warped = torch.bmm(R, x_y_invz.view(B, 2, H * W)) + t.view(B, 3, 1).expand(
-            B, 3, H * W
-        )
+        warped = torch.bmm(R, x_y_invz.view(B, 3, H*W))
+        warped += t.view(B, 3, 1).expand(B, 3, H*W)
         px, py, invD = warped.split(1, dim=1)
 
     x = px.view(B, -1, 1)
@@ -701,7 +803,7 @@ def compute_Jacobian_warping(invD, K, px, py, pose=None):
     xy = x * y
     o = torch.zeros((B, H * W, 1)).to(invD)
 
-    dx_dp = torch.cat((-xy, 1 + x**2, -y, invz, o, invz * x), dim=2)
+    dx_dp = torch.cat((-xy, 1 + x**2, -y, invz, o, -invz * x), dim=2)
     dy_dp = torch.cat((-1 - y**2, xy, x, o, invz, -invz * y), dim=2)
 
     fx, fy, cx, cy = torch.unbind(K, dim=1)
@@ -737,16 +839,25 @@ def least_square_solve(H, Rhs):
     Returns:
         increment (kxi) [B, 6, 1]
     """
-    H_, Rhs_ = H.cpu(), Rhs.cpu()
-    try:
-        U = torch.linalg.cholesky(H_, upper=True)
-        xi = torch.cholesky_solve(Rhs_, U, upper=True).to(H)
-    except:
-        inv_H = torch.inverse(H)
-        xi = torch.bmm(inv_H, Rhs)
-        # because the jacobian is also including the minus signal, it should be (J^T * J) J^T * r
-        # xi = - xi
+    # H_, Rhs_ = H.cpu(), Rhs.cpu()
+    # try:
+    #     U = torch.linalg.cholesky(H_, upper=True)
+    #     xi = torch.cholesky_solve(Rhs_, U, upper=True).to(H)
+    # except:
+    #     inv_H = torch.inverse(H)
+    #     xi = torch.bmm(inv_H, Rhs)
+    #     # because the jacobian is also including the minus signal, it should be (J^T * J) J^T * r
+    #     # xi = - xi
+    inv_H = invH(H)
+    xi = torch.bmm(inv_H, Rhs)
     return xi
+
+def invH(H):
+    if H.is_cuda:
+        invH = torch.inverse(H.cpu()).cuda()
+    else:
+        invH = torch.inverse(H)
+    return invH
 
 
 def inverse_update_pose(H, Rhs, pose):
@@ -793,9 +904,16 @@ def forward_update_pose(H, Rhs, pose):
 
 def LM_H(JtWJ):
     """Add a small diagonal damping. Without it, the training becomes quite unstable. Though no clear difference has been observed in inference without it."""
-    B, L, _ = JtWJ.shape
-    diagJtJ = torch.diag_embed(torch.diagonal(JtWJ, dim1=-2, dim2=-1))
-    traceJtJ = torch.sum(diagJtJ, (2, 1))[:, None].expand(B, L)
-    epsilon = torch.diag_embed(traceJtJ * 1e-6)
+    # B, L, _ = JtWJ.shape
+    # diagJtJ = torch.diag_embed(torch.diagonal(JtWJ, dim1=-2, dim2=-1))
+    # traceJtJ = torch.sum(diagJtJ, (2, 1))[:, None].expand(B, L)
+    # epsilon = torch.diag_embed(traceJtJ * 1e-6)
+    # Hessian = JtWJ + epsilon
+    # return Hessian
+    B, _, _ = JtWJ.shape
+    diag_mask = torch.eye(6).view(1, 6, 6).type_as(JtWJ)
+    diagJtJ = diag_mask * JtWJ
+    traceJtJ = torch.sum(diagJtJ, (2, 1))
+    epsilon = (traceJtJ * 1e-6).view(B, 1, 1) * diag_mask
     Hessian = JtWJ + epsilon
     return Hessian
