@@ -795,6 +795,14 @@ def compute_Jacobian_warping(invD, K, px, py, pose=None):
         warped = torch.bmm(R, x_y_invz.view(B, 3, H*W))
         warped += t.view(B, 3, 1).expand(B, 3, H*W)
         px, py, invD = warped.split(1, dim=1)
+        # I = torch.ones((B, 1, H, W)).type_as(invD)
+        # x_y_1 = torch.cat((px, py, I), dim=1)
+        # R, t = pose
+        # warped = torch.bmm(R, x_y_1.view(B, 3, H*W)) + t.view(B, 3, 1).expand(B, 3, H*W) * invD.view(B, 1, H*W).expand(B, 3, H*W)
+        # x_, y_, s_ = warped.split(1, dim=1)
+        # px = x_ / s_
+        # py = y_ / s_
+        # invD = invD / s_.view(B, 1 ,H, W)
 
     x = px.view(B, -1, 1)
     y = py.view(B, -1, 1)

@@ -39,3 +39,18 @@ class ImagePyramidsInterpolate(nn.Module):
         xout = [func.interpolate(x, scale_factor=1<<i, mode=self.mode, align_corners=True) for i in self.scales]
         return xout
     
+
+# class ImagePyramids(nn.Module):
+    
+#     def __init__(self, scales, pool='avg') -> None:
+#         super().__init__()
+#         self.scales = scales
+#         if pool == 'avg':
+#             self.mode = 'bilinear'
+#         elif pool == 'max':
+#             self.mode = 'nearest'
+    
+#     def forward(self, x):
+#         B, C, H, W = x.shape
+#         xout = [func.interpolate(x, scale_factor=1 / (1<<i), mode=self.mode) for i in self.scales]
+#         return xout
