@@ -11,7 +11,7 @@ python -B experiment/rgbd_vo.py \
 --feature_extract conv \
 --uncertainty laplacian \
 --uncertainty_channel 1 \
---direction forward \
+--direction inverse \
 --init_pose sfm_net \
 --train_init_pose \
 --multi_hypo prob_fuse \
