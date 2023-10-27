@@ -9,6 +9,8 @@ from omegaconf import OmegaConf
 
 from torch.utils.data import DataLoader
 
+from utils.visualize import create_mosaic
+
 import matplotlib.pyplot as plt
 import cv2
 
@@ -66,13 +68,19 @@ if __name__ == '__main__':
         cv2.namedWindow("RGB", cv2.WINDOW_NORMAL)
         cv2.imshow("RGB", cv2.cvtColor(color0, cv2.COLOR_RGB2BGR))
 
+        # Visualize normal and depth map
         n1 = normal_map_to_vis(normal1)
         n2 = normal_map_to_vis(normal2)
-        cv2.namedWindow("Normal map: 1", cv2.WINDOW_NORMAL)
-        cv2.imshow("Normal map: 1", cv2.cvtColor(n1, cv2.COLOR_RGB2BGR))
-        cv2.namedWindow("Normal map: 2", cv2.WINDOW_NORMAL)
-        cv2.imshow("Normal map: 2", cv2.cvtColor(n2, cv2.COLOR_RGB2BGR))
 
+        depth0 = depth0.squeeze().cpu().numpy()
+        depth1 = depth1.squeeze().cpu().numpy()
+        vert_norm1 = create_mosaic([n1, depth0], cmap=['NORMAL', 'NORMAL'], order='HWC', normalize=True)
+        vert_norm2 = create_mosaic([n2, depth1], cmap=['NORMAL', 'NORMAL'], order='HWC', normalize=True)
+        
+        cv2.namedWindow("Normal and depth map: 1", cv2.WINDOW_NORMAL)
+        cv2.imshow("Normal and depth map: 1", vert_norm1)
+        cv2.namedWindow("Normal and depth map: 2", cv2.WINDOW_NORMAL)
+        cv2.imshow("Normal and depth map: 2", vert_norm2)
         cv2.waitKey(10)
 
     cv2.destroyAllWindows()
