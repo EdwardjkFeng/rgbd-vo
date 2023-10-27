@@ -18,9 +18,10 @@ python -B experiment/rgbd_vo.py \
 --remove_tru_sigma \
 --checkpoint checkpoint/dynamic_finetune_checkpoint_epoch39.pth.tar \
 --vo RGB \
---image_resize 1 \
---time \
---vis_feat \
+--image_resize 0.25 \
+# --gt_tracker
+# --time \
+# --vis_feat \
 
 # --combine_ICP \
 
