@@ -29,22 +29,24 @@ class TrustRegionInverseCompositional(nn.Module):
         B, C, H, W = x0.shape
         px, py = geometry.generate_xy_grid(B, H, W, K)
 
-        self.timers.tic("pre-compute Jacobian")
-        J_F_p = self.__precompute_Jacobian(x0, invD0, px, py, K)
-        self.timers.toc("pre-compute Jacobian")
-
-        self.timers.tic("compute residuals")
-        residuals, occ = self.__compute_warped_residual(
+        self.timers.tic("compute warping residuals")
+        residuals, occ, u_warped, v_warped = self.__compute_warped_residual(
             pose, x0, x1, invD0, invD1, px, py, K
         )
-        self.timers.toc("compute residuals")
+        self.timers.toc("compute warping residuals")
+
+        self.timers.tic("pre-compute Jacobian")
+        J_F_p = self.__precompute_Jacobian(
+            x0, invD0, px, py, K, u_warped, v_warped, pose
+        )
+        self.timers.toc("pre-compute Jacobian")
 
         self.timers.tic("robust estimator")
         weights = self.mEstimator(residuals, x0, x1, wPrior)
         self.timers.toc("robust estimator")
 
         self.timers.tic("pre-compute JtWJ")
-        # J_F_p[occ.expand(B, C, H, W).view(B, -1), :] = 1e-8
+        # J_F_p[occ.expand(B, C, H, W).view(B, -1), :] = 0.
         WJ = weights.view(B, -1, 1) * J_F_p
         Jt = J_F_p.transpose(1, 2)
         JtWJ = torch.bmm(Jt, WJ)
@@ -59,21 +61,30 @@ class TrustRegionInverseCompositional(nn.Module):
             self.timers.toc("solve x=A^{-1}b")
 
             self.timers.tic("compute residuals")
-            residuals, occ = self.__compute_warped_residual(
+            residuals, occ, _, _ = self.__compute_warped_residual(
                 pose, x0, x1, invD0, invD1, px, py, K
             )
 
         return pose, weights
     
-    def __precompute_Jacobian(self, x, invD, px, py, K):
+    def __precompute_Jacobian(self, x, invD, px, py, K, u_warped, v_warped, pose):
         JF_x, JF_y = feature_gradient(x)
-        Jx_p, Jy_p = self.__compute_Jacobian_warping(invD, px, py, K)
+        # JF_x = geometry.warp_features(JF_x, u_warped, v_warped)
+        # JF_y = geometry.warp_features(JF_y, u_warped, v_warped)
+        Jx_p, Jy_p = self.__compute_Jacobian_warping(invD, px, py, K, pose)
         JF_p = self.__compute_Jacobian_dFdp(JF_x, JF_y, Jx_p, Jy_p)
         return JF_p
     
-    def __compute_Jacobian_warping(self, inv_depth, px, py, K):
+    def __compute_Jacobian_warping(self, inv_depth, px, py, K, pose=None):
         B, C, H, W = inv_depth.shape
         assert(C == 1)
+
+        if pose is not None:
+            x_y_invz = torch.cat((px, py, inv_depth), dim=1)
+            R, t = pose
+            warped = torch.bmm(R, x_y_invz.view(B, 3, H*W))
+            warped += t.view(B, 3, 1).expand(B, 3, H*W)
+            px, py, inv_depth = warped.split(1, dim=1)
 
         x = px.view(B, -1, 1)
         y = py.view(B, -1, 1)
@@ -110,7 +121,7 @@ class TrustRegionInverseCompositional(nn.Module):
         
         residuals[occ.expand(B, C, H, W)] = 0.
 
-        return residuals, occ
+        return residuals, occ, u_warped, v_warped
     
     def __check_occ(self, inv_z_buffer, inv_z_ref, u, v, thres=1e-1):
         """ z-buffering check of occlusion 

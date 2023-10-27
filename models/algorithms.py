@@ -744,16 +744,13 @@ def feature_gradient(F, normalize_gradient=True):
     """
     B, C, H, W = F.shape
 
-    sobel_x = (
-        torch.FloatTensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]).view(1, 1, 3, 3).to(F)
-    )
-    sobel_y = (
-        torch.FloatTensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]).view(1, 1, 3, 3).to(F)
-    )
+    sobel = torch.asarray([[-1, 0, 1], 
+                           [-2, 0, 2], 
+                           [-1, 0, 1]]).view(1, 1, 3, 3).to(F)
 
     F_pad = func.pad(F.view(-1, 1, H, W), (1, 1, 1, 1), mode="replicate")
-    dF_dx = func.conv2d(F_pad, sobel_x, stride=1, padding=0)
-    dF_dy = func.conv2d(F_pad, sobel_y, stride=1, padding=0)
+    dF_dx = func.conv2d(F_pad, sobel, stride=1, padding=0)
+    dF_dy = func.conv2d(F_pad, sobel.transpose(2, 3), stride=1, padding=0)
 
     if normalize_gradient:
         mag = torch.sqrt((dF_dx**2) + (dF_dy**2) + 1e-8)
@@ -778,9 +775,8 @@ def compute_Jacobian_dFdp(JF_x, JF_y, Jx_p, Jy_p):
     B, C, H, W = JF_x.shape
 
     # precompute J_F_p, JtWJ
-    JF_p = JF_x.view(B, C, -1, 1) * Jx_p.view(B, 1, -1, 6) + JF_y.view(
-        B, C, -1, 1
-    ) * Jy_p.view(B, 1, -1, 6)
+    JF_p = JF_x.view(B, C, -1, 1) * Jx_p.view(B, 1, -1, 6) + \
+        JF_y.view(B, C, -1, 1) * Jy_p.view(B, 1, -1, 6)
 
     return JF_p.view(B, -1, 6)
 
@@ -809,10 +805,10 @@ def compute_Jacobian_warping(invD, K, px, py, pose=None):
     invz = invD.view(B, -1, 1)
 
     xy = x * y
-    o = torch.zeros((B, H * W, 1)).to(invD)
+    O = torch.zeros((B, H * W, 1)).to(invD)
 
-    dx_dp = torch.cat((-xy, 1 + x**2, -y, invz, o, -invz * x), dim=2)
-    dy_dp = torch.cat((-1 - y**2, xy, x, o, invz, -invz * y), dim=2)
+    dx_dp = torch.cat((-xy, 1 + x**2, -y, invz, O, -invz * x), dim=2)
+    dy_dp = torch.cat((-1 - y**2, xy, x, O, invz, -invz * y), dim=2)
 
     fx, fy, cx, cy = torch.unbind(K, dim=1)
     return dx_dp * fx.view(B, 1, 1), dy_dp * fy.view(B, 1, 1)
@@ -847,17 +843,17 @@ def least_square_solve(H, Rhs):
     Returns:
         increment (kxi) [B, 6, 1]
     """
-    # H_, Rhs_ = H.cpu(), Rhs.cpu()
-    # try:
-    #     U = torch.linalg.cholesky(H_, upper=True)
-    #     xi = torch.cholesky_solve(Rhs_, U, upper=True).to(H)
-    # except:
-    #     inv_H = torch.inverse(H)
-    #     xi = torch.bmm(inv_H, Rhs)
+    H_, Rhs_ = H.cpu(), Rhs.cpu()
+    try:
+        U = torch.linalg.cholesky(H_, upper=True)
+        xi = torch.cholesky_solve(Rhs_, U, upper=True).to(H)
+    except:
+        inv_H = torch.inverse(H)
+        xi = torch.bmm(inv_H, Rhs)
     #     # because the jacobian is also including the minus signal, it should be (J^T * J) J^T * r
     #     # xi = - xi
-    inv_H = invH(H)
-    xi = torch.bmm(inv_H, Rhs)
+    # inv_H = invH(H)
+    # xi = torch.bmm(inv_H, Rhs)
     return xi
 
 def invH(H):
@@ -912,16 +908,9 @@ def forward_update_pose(H, Rhs, pose):
 
 def LM_H(JtWJ):
     """Add a small diagonal damping. Without it, the training becomes quite unstable. Though no clear difference has been observed in inference without it."""
-    # B, L, _ = JtWJ.shape
-    # diagJtJ = torch.diag_embed(torch.diagonal(JtWJ, dim1=-2, dim2=-1))
-    # traceJtJ = torch.sum(diagJtJ, (2, 1))[:, None].expand(B, L)
-    # epsilon = torch.diag_embed(traceJtJ * 1e-6)
-    # Hessian = JtWJ + epsilon
-    # return Hessian
-    B, _, _ = JtWJ.shape
-    diag_mask = torch.eye(6).view(1, 6, 6).type_as(JtWJ)
-    diagJtJ = diag_mask * JtWJ
-    traceJtJ = torch.sum(diagJtJ, (2, 1))
-    epsilon = (traceJtJ * 1e-6).view(B, 1, 1) * diag_mask
+    B, L, _ = JtWJ.shape
+    diagJtJ = torch.diag_embed(torch.diagonal(JtWJ, dim1=-2, dim2=-1))
+    traceJtJ = torch.sum(diagJtJ, (2, 1))[:, None].expand(B, L)
+    epsilon = torch.diag_embed(traceJtJ * 1e-6)
     Hessian = JtWJ + epsilon
     return Hessian
