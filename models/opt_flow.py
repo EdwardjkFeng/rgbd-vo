@@ -33,6 +33,9 @@ def convert_flow_for_display(flow):
     :rtype:
     """
 
+    if torch.is_tensor(flow):
+        flow = flow.detach().cpu().numpy()
+
     ang = np.arctan2(flow[1, :, :], flow[0, :, :])
     ang[ang < 0] += 2 * np.pi
     ang /= 2 * np.pi
@@ -103,51 +106,52 @@ if __name__ == '__main__':
         num_workers=4,
     )
 
-    for batch in torch_loader:
-        image1, image2, _, _, _, _ = batch['data']
-        B, C, H, W = image1.shape
+    # If you can, run this example on a GPU, it will be a lot faster.
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Deep optical flow model
+    device = 'cuda'
+    model = raft_large(pretrained=True, progress=False).to(device)
+    model = model.eval()
 
-        img1_batch = torch.cat((image1, image2), dim=0)
-        img2_batch = torch.cat((image2, image1), dim=0)
-        plot(img1_batch)
-        plot(img2_batch)
-        plt.show()
+    with torch.no_grad():
+        for batch in torch_loader:
+            image1, image2, _, _, _, _ = batch['data']
+            B, C, H, W = image1.shape
 
-        # If you can, run this example on a GPU, it will be a lot faster.
-        # device = "cuda" if torch.cuda.is_available() else "cpu"
-        device = 'cpu'
+            img1_batch = torch.cat((image1, image2), dim=0)
+            img2_batch = torch.cat((image2, image1), dim=0)
+            plot(img1_batch)
+            plot(img2_batch)
+            plt.show()
 
-        img1_batch = preprocess(img1_batch).to(device)
-        img2_batch = preprocess(img2_batch).to(device)
+            img1_batch = preprocess(img1_batch).to(device)
+            img2_batch = preprocess(img2_batch).to(device)
 
-        # model = raft_large(pretrained=True, progress=False).to(device)
-        # model = model.eval()
+            list_of_flows = model(img1_batch.to(device), img2_batch.to(device))
+            predicted_flows = list_of_flows[-1]
+            print(f"dtype = {predicted_flows.dtype}")
+            print(f"shape = {predicted_flows.shape} = (N, 2, H, W)")
+            print(f"min = {predicted_flows.min()}, max = {predicted_flows.max()}")
 
-        # list_of_flows = model(img1_batch.to(device), img2_batch.to(device))
-        # predicted_flows = list_of_flows[-1]
-        # print(f"dtype = {predicted_flows.dtype}")
-        # print(f"shape = {predicted_flows.shape} = (N, 2, H, W)")
-        # print(f"min = {predicted_flows.min()}, max = {predicted_flows.max()}")
+            flow_imgs = flow_to_image(predicted_flows)
 
-        # flow_imgs = flow_to_image(predicted_flows)
+            # # The images have been mapped into [-1, 1] but for plotting we want them in [0, 1]
+            img1_batch = [(img1 + 1) / 2 for img1 in img1_batch]
 
-        # # The images have been mapped into [-1, 1] but for plotting we want them in [0, 1]
-        img1_batch = [(img1 + 1) / 2 for img1 in img1_batch]
+            grid = [[img1, flow_img] for (img1, flow_img) in zip(img1_batch, flow_imgs)]
+            plot(grid)
+            plt.show()
 
-        # grid = [[img1, flow_img] for (img1, flow_img) in zip(img1_batch, flow_imgs)]
-        # plot(grid)
-        # plt.show()
+            # image1 = image1.squeeze().permute(1, 2, 0).cpu().detach().numpy()
+            # image1 = cv2.cvtColor(image1, cv2.COLOR_RGB2GRAY)
+            # image2 = image2.squeeze().permute(1, 2, 0).cpu().detach().numpy()
+            # image2 = cv2.cvtColor(image2, cv2.COLOR_RGB2GRAY)
 
-        image1 = image1.squeeze().permute(1, 2, 0).cpu().detach().numpy()
-        image1 = cv2.cvtColor(image1, cv2.COLOR_RGB2GRAY)
-        image2 = image2.squeeze().permute(1, 2, 0).cpu().detach().numpy()
-        image2 = cv2.cvtColor(image2, cv2.COLOR_RGB2GRAY)
-
-        flow = compute_optical_flow(image1, image2)
-        flow_img1 = flow_to_image(torch.from_numpy(np.transpose(flow, [2, 0, 1])))
-        flow = compute_optical_flow(image2, image1)
-        flow_img2 = flow_to_image(torch.from_numpy(np.transpose(flow, [2, 0, 1])))
-        flow_imgs = [flow_img1, flow_img2]
-        grid = [[img1, flow_img] for (img1, flow_img) in zip(img1_batch, flow_imgs)]
-        plot(grid)
-        plt.show()
+            # flow = compute_optical_flow(image1, image2)
+            # flow_img1 = flow_to_image(torch.from_numpy(np.transpose(flow, [2, 0, 1])))
+            # flow = compute_optical_flow(image2, image1)
+            # flow_img2 = flow_to_image(torch.from_numpy(np.transpose(flow, [2, 0, 1])))
+            # flow_imgs = [flow_img1, flow_img2]
+            # grid = [[img1, flow_img] for (img1, flow_img) in zip(img1_batch, flow_imgs)]
+            # plot(grid)
+            # plt.show()
