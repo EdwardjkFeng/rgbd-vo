@@ -483,6 +483,7 @@ class LeastSquareTracking(nn.Module):
         if self.uncer_prop:
             sigma_ksi.append(output0[2])
         if self.timers: self.timers.toc('trust-region update')
+        if self.timers: self.timers.print()
 
         with torch.no_grad():
             if logger is not None or vis or self.vis_feat_uncer:
@@ -707,12 +708,20 @@ class LeastSquareTracking(nn.Module):
     def _preprocess(self, img0, img1, depth0, depth1, poseI=None, obj_mask0=None, obj_mask1=None):
         if self.timers: self.timers.tic('extract features')
         # pre-processing all the data, all the invalid inputs depth are set to 0
+        # invD0 = torch.where(depth0 > 0, 1.0 / depth0, 0.)
+        # invD1 = torch.where(depth1 > 0, 1.0 / depth1, 0.)
+        # invD0 = torch.clamp(invD0, 0, 10)
+        # invD1 = torch.clamp(invD1, 0, 10)
         invD0 = torch.clamp(1.0 / depth0, 0, 10)
         invD1 = torch.clamp(1.0 / depth1, 0, 10)
         invD0[invD0 == invD0.min()] = 0
         invD1[invD1 == invD1.min()] = 0
         invD0[invD0 == invD0.max()] = 0
         invD1[invD1 == invD1.max()] = 0
+        # valid_depth0 = (1.0 / depth0 > 0) & (1.0 / depth0 < 10)
+        # valid_depth1 = (1.0 / depth1 > 0) & (1.0 / depth1 < 10)
+        # invD0 = torch.where(valid_depth0, 1.0/depth0, 0.0)
+        # invD1 = torch.where(valid_depth1, 1.0/depth1, 0.0)
 
         I0 = color_normalize(img0)
         I1 = color_normalize(img1)
