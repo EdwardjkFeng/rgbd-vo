@@ -124,7 +124,7 @@ class TUM(BaseDataset):
         "keyframes": [1],
         "truncate_depth": True,
         "grayscale": False,
-        "resize": None,
+        "resize": 0.25,
         "add_val_dataset": False,
     }
 

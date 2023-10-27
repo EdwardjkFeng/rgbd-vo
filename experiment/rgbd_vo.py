@@ -241,7 +241,7 @@ def callback(scene: "MyScene"):
                     color0, color1, depth0, depth1, intrins, index=scene.index
                 )
             else:
-                output = scene.network.forward(color0, color1, depth0, depth1, intrins, pose=pose_gt)
+                output = scene.network.forward(color0, color1, depth0, depth1, intrins, pose=None)
         R, t = output
         if scene.is_gt_tracking:
             T_WC = GT_WC
@@ -389,7 +389,7 @@ def main(options):
         "keyframes": [1],
         "truncate_depth": True,
         "grayscale": False,
-        "resize": None,
+        "resize": 0.25,
         "add_val_dataset": False,
     }
 
