@@ -74,7 +74,7 @@ def preprocess(batch):
         [
             T.ConvertImageDtype(torch.float32),
             T.Normalize(mean=0.5, std=0.5),  # map [0, 1] into [-1, 1]
-            T.Resize(size=(520, 960)),
+            # T.Resize(size=(480, 640)),
         ]
     )
     batch = transforms(batch)
