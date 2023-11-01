@@ -13,6 +13,7 @@ from typing import Optional, List
 # URL of TUM RGB-D dataset
 URLs = dict(
     TUM_RGBD = "https://vision.in.tum.de/rgbd/dataset/",
+    Bonn_RGBD = "https://www.ipb.uni-bonn.de/html/projects/rgbd_dynamic2019/"
 )
 
 TUM_RGBD_Sequences = {
@@ -60,6 +61,37 @@ TUM_RGBD_Sequences = {
         "rgbd_dataset_freiburg3_walking_rpy",
         "rgbd_dataset_freiburg3_walking_static",
         "rgbd_dataset_freiburg3_walking_xyz",
+    ],
+}
+
+Bonn_RGBD_Sequences = {
+    "seq": [
+        "rgbd_bonn_crowd",
+        "rgbd_bonn_kidnapping_box2",
+        "rgbd_bonn_moving_nonobstructing_box",
+        "rgbd_bonn_placing_obstructing_box",
+        "rgbd_bonn_static",
+        "rgbd_bonn_balloon",
+        "rgbd_bonn_placing_nonobstructing_box3",
+        "rgbd_bonn_moving_nonobstructing_box2",
+        "rgbd_bonn_balloon_tracking",
+        "rgbd_bonn_moving_obstructing_box",
+        "rgbd_bonn_person_tracking2",
+        "rgbd_bonn_removing_nonobstructing_box",
+        "rgbd_bonn_placing_nonobstructing_box2",
+        "rgbd_bonn_synchronous",
+        "rgbd_bonn_crowd3",
+        "rgbd_bonn_removing_obstructing_box",
+        "rgbd_bonn_placing_nonobstructing_box",
+        "rgbd_bonn_balloon2",
+        "rgbd_bonn_crowd2",
+        "rgbd_bonn_synchronous2",
+        "rgbd_bonn_removing_nonobstructing_box2",
+        "rgbd_bonn_static_close_far",
+        "rgbd_bonn_moving_obstructing_box2",
+        "rgbd_bonn_kidnapping_box",
+        "rgbd_bonn_person_tracking",
+        "rgbd_bonn_balloon_tracking2",
     ],
 }
 
@@ -113,19 +145,51 @@ def download_TUM_RGBD(datapath, sequences_to_download: Optional[list] = None):
     out_path.mkdir(exist_ok=True, parents=True)
     print('Downloading the TUM RGB-D Dataset...')
     for sequence in sequences:
+        # Check if sequence is already downloaded
+        if os.path.exists(os.path.join(out_path, sequence[10:])):
+            print(f"{sequence} already exists, skip...")
+            continue
         download_from_url(url + f'{sequence}.tgz', out_path)
         extract_tar(out_path / f'{sequence[10:]}.tgz', out_path)
 
 
+def download_Bonn_RGBD(datapath, sequences_to_download: Optional[list] = None):
+    if sequences_to_download:
+        sequences = sequences_to_download
+    else:
+        sequences = Bonn_RGBD_Sequences
+        sequences = [f'{seq}' for seq in sequences["seq"]]
+    
+    url = URLs["Bonn_RGBD"]
+    out_path = Path(datapath) / "Bonn_RGBD_Dataset"
+
+    out_path.mkdir(exist_ok=True, parents=True)
+    print('Downloading the Bonn RGB-D Dataset...')
+    for sequence in sequence:
+        # Check if sequence is already downloaded
+        if os.path.exists(os.path.join(out_path, sequence)):
+            print(f"{sequence} already exists, skip...")
+            continue
+        download_from_url(url + f'{sequence}.zip', out_path)
+        extract_tar(out_path / f'{sequence}.zip', out_path)
 
 if __name__ == '__main__':
+    import argparse
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-d", "--dataset", default="TUM_RGBD", type=str, help="dataset to download")
+    parser.add_argument("-s", "--sequences", default=[], nargs='+', help="sequences to download")
+    parser.add_argument("-p", "--datapath", default='/home/jingkun/Dataset', type=str, help="directory to store the downloaded sequences")
 
-    # Sequence names to download (adjust this list according to what you need)
-    # sequences_to_download = ["freiburg2/rgbd_dataset_freiburg2_desk"]
+    args = parser.parse_args()
 
-    datapath = '/home/jingkun/Dataset' # TODO need to be adjust
+    download_func = 'download_' + args.dataset
+    download_func = locals()[download_func]
 
-    download_TUM_RGBD(datapath)
+    if len(args.sequences) != 0:
+        download_func(args.datapath, args.sequences)
+    else:
+        download_func(args.datapath)
 
     print("All sequences downloaded.")
 
