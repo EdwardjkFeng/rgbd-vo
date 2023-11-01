@@ -26,6 +26,7 @@ def get_datasets_path(which_dataset):
 
 
 TUM_DATASET_DIR = get_datasets_path("TUM_RGBD")
+BONN_DATASET_DIR = get_datasets_path("Bonn_RGBD")
 # COFUSION_DIR = get_datasets_path("CoFusion")
 # ICL_DIR = get_datasets_path("ICL_NUIM")
 # ETH3D_DATASET_DIR = get_datasets_path("ETH3D")
@@ -37,7 +38,14 @@ def load_data(dataset_name, conf):
     if dataset_name == "TUM_RGBD":
         from dataset.tum_rgbd import TUM
 
+        conf["dataset_dir"] = TUM_DATASET_DIR
         loader = TUM(conf).get_dataset()
+    
+    elif dataset_name == "Bonn_RGBD":
+        from dataset.bonn_rgbd import Bonn
+
+        conf["dataset_dir"] = BONN_DATASET_DIR
+        loader = Bonn(conf).get_dataset()
 
     else:
         raise NotImplementedError()

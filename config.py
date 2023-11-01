@@ -109,7 +109,7 @@ def add_basics_config(parser):
     parser.add_argument('--cpu_workers', type=int, default=12,
         help="Number of cpu threads for data loader.\n")
     parser.add_argument('--dataset', type=str,
-        choices=('TUM_RGBD', 'ScanNet', 'MovingObjects3D', 'VaryLighting'),
+        choices=('TUM_RGBD', 'Bonn_RGBD', 'ScanNet', 'MovingObjects3D', 'VaryLighting'),
         help='Choose a dataset to train/val/evaluate.\n')
     parser.add_argument('--image_resize', type=float, default=0.25,
                         help='downsize ratio for input images')
