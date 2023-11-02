@@ -11,7 +11,7 @@ from utils.timers import Timers
 def select_method(method_name, options):
     assert method_name in ['RGB', 'RGB+ICP']
     if method_name == 'RGB':
-        print('==>Load RGB method')
+        print("{:=^80}".format(" Load RGB method "))
         rgb_tracker = LeastSquareTracking(
             encoder_name='RGB',
             combine_ICP=False,
@@ -33,7 +33,7 @@ def select_method(method_name, options):
         return rgb_tracker
     
     if method_name == "RGB+ICP":
-        print("==>Load RGB+ICP method")
+        print("{:=^80}".format(" Load RGB+ICP method "))
         rgbd_tracker = LeastSquareTracking(
             encoder_name="RGB",
             combine_ICP=True,

@@ -22,6 +22,7 @@ def get_class(mod_name, base_path, BaseClass):
 
 def print_conf(conf: DictConfig, prefix: str = ''):
     """ Print configurations. """
+    print(f"{' Configurations ':=^80}")
     for k, v in conf.items():
         if isinstance(v, DictConfig):
             # Recursively iterate through nested configs

@@ -138,8 +138,7 @@ class TUM(BaseDataset):
 
     def get_dataset(self):
         return _Dataset(self.conf)
-
-# DATA_PATH = '/home/jingkun/Dataset/'
+    
 
 class _Dataset(data.Dataset):
     def __init__(self, conf):
