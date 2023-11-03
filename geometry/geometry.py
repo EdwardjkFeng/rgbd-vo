@@ -164,7 +164,7 @@ def batch_warp_inverse_depth(px, py, invD0, pose10, K):
     return u_.view(B, 1, H, W), v_.view(B, 1, H, W), inv_z_
 
 
-def check_occ(inv_z_buffer, inv_z_ref, crd, thres=1e-1, depth_valid=None):
+def check_occ(inv_z_buffer, inv_z_ref, u, v, thres=1e-1, depth_valid=None):
     """z-buffering check of occlusion
 
     Args:
@@ -179,7 +179,6 @@ def check_occ(inv_z_buffer, inv_z_ref, crd, thres=1e-1, depth_valid=None):
     """
 
     B, _, H, W = inv_z_buffer.shape
-    u, v = crd.split(1, dim=1)
     inv_z_warped = warp_features(inv_z_ref, u, v)
 
     inlier = inv_z_buffer > inv_z_warped - thres

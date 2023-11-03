@@ -22,6 +22,7 @@ from models.inv_compositional import TrustRegionInverseCompositional as TrustReg
 from models.pyramid import ImagePyramids
 from models.algorithms import DirectSolverNet
 from models.deep_estimator import DeepRobustEstimator
+from models.segmentation import MaskRCNN
 # from models.algorithms import SFMPoseNet, PoseNet
 # from models.algorithms import ScaleNet
 from utils import visualize
@@ -103,6 +104,17 @@ class LeastSquareTracking(nn.Module):
         init_pose_multi_hypo = options.multi_hypo
         res_input_for_init_pose = options.res_input
         self.checkpoint = options.checkpoint
+
+        """ =============================================================== """
+        """           Initialize the Moving Object Segmentation             """
+        """ =============================================================== """
+
+        self.segm = MaskRCNN(
+            model="maskrcnn_resnet50_fpn",
+            prob_threshold=0.4,
+            score_theshold=0.65,
+            vis_mask=True,
+        )
 
         """ =============================================================== """
         """             Initialize the Deep Feature Extractor               """
@@ -321,7 +333,9 @@ class LeastSquareTracking(nn.Module):
         """ =============================================================== """
         """             Initialize Pose Predictor Network                 """
         """ =============================================================== """
-        print("=> Init pose is estimated by", init_pose_type)
+        print("{:=^80}".format(
+            " Init pose is estimated by " + init_pose_type + ' ')
+        )
         ## init pose with identity
         # if self.predict_init_pose:
         #     if self.train_init_pose:
@@ -722,6 +736,9 @@ class LeastSquareTracking(nn.Module):
         # valid_depth1 = (1.0 / depth1 > 0) & (1.0 / depth1 < 10)
         # invD0 = torch.where(valid_depth0, 1.0/depth0, 0.0)
         # invD1 = torch.where(valid_depth1, 1.0/depth1, 0.0)
+
+        obj_mask0 = self.segm(img0)
+        obj_mask1 = self.segm(img1)
 
         I0 = color_normalize(img0)
         I1 = color_normalize(img1)

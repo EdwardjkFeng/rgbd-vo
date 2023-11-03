@@ -713,8 +713,7 @@ def compute_warped_residual(
         px, py, invD0, pose10, K
     )
     F1_1to0 = geometry.warp_features(F1, u_warped, v_warped)
-    crd = torch.cat((u_warped, v_warped), dim=1)
-    occ = geometry.check_occ(inv_z_warped, invD1, crd)
+    occ = geometry.check_occ(inv_z_warped, invD1, u_warped, v_warped)
 
     residuals = F1_1to0 - F0
 

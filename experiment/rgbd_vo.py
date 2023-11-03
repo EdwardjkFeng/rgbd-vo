@@ -277,7 +277,7 @@ def callback(scene: "MyScene"):
     # XYZ->RGB, Z is blue
     if options.dataset == "VaryLighting":
         axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.005)
-    elif options.dataset in ["TUM_RGBD", "ScanNet"]:
+    elif options.dataset in ["TUM_RGBD", "ScanNet", "Bonn_RGBD"]:
         axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.08)
     else:
         raise NotImplementedError()
@@ -384,7 +384,6 @@ def callback(scene: "MyScene"):
 
 def main(options):
     conf = {
-        "select_traj": "rgbd_dataset_freiburg1_desk",
         "category": "test",
         "keyframes": [1],
         "truncate_depth": True,
@@ -395,33 +394,14 @@ def main(options):
 
     # Load data
     if options.dataset == "TUM_RGBD":
-        sequence_dir = "rgbd_dataset_freiburg3_walking_xyz"
-        # sequence_dir = 'rgbd_dataset_freiburg2_desk'
+        sequence = 'rgbd_dataset_freiburg1_desk'
+        # sequence = "rgbd_dataset_freiburg3_walking_xyz"
+        conf["select_traj"] = sequence
         np_loader = load_data("TUM_RGBD", conf=conf)
-    elif options.dataset == "VaryLighting":
-        np_loader = load_data(
-            "VaryLighting",
-            keyframes=[
-                1,
-            ],
-            load_type="test",
-            select_trajectory="scene17_demo",  # 'l_scene3',
-            truncate_depth=True,
-            load_numpy=False,
-            pair=options.vo_type,
-        )
-    elif options.dataset == "ScanNet":
-        np_loader = load_data(
-            "ScanNet",
-            keyframes=[
-                1,
-            ],
-            load_type="test",
-            select_trajectory="scene0593_00",
-            truncate_depth=True,
-            load_numpy=False,
-            options=options,
-        )
+    elif options.dataset == "Bonn_RGBD":
+        sequence = "rgbd_bonn_balloon_tracking"
+        conf["select_traj"] = sequence
+        np_loader = load_data(options.dataset, conf=conf)
 
     scene = MyScene()
     # scene.visualizer = vis
