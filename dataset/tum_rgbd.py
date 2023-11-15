@@ -177,7 +177,6 @@ class TUM(BaseDataset):
         "truncate_depth": True,
         "grayscale": False,
         "resize": 0.25,
-        "add_val_dataset": False,
     }
 
     def _init(self, conf):
@@ -215,7 +214,7 @@ class _Dataset(data.Dataset):
         self.truncate_depth = self.conf.truncate_depth
 
         logger.info(
-            f"TUM dataloader for {self.conf.category} using keyframe {self.keyframes}: {self.ids} valid frames."
+            f"{self.conf.name} dataloader for {self.conf.category} using keyframe {self.keyframes}: {self.ids} valid frames."
         )
 
     def __load_train_val(self):
@@ -229,7 +228,7 @@ class _Dataset(data.Dataset):
                         continue
 
                 self.calib.append(scene['calib'])
-                datacache_root = osp.join(osp.dirname(__file__), "cache/tum_rgbd")
+                datacache_root = osp.join(osp.dirname(__file__), f"cache/{self.conf.name}")
                 sync_traj_file = osp.join(
                     datacache_root, seq_path, "sync_trajectory.pkl"
                 )
@@ -238,7 +237,7 @@ class _Dataset(data.Dataset):
                         f"Synchronized trajectory file {sync_traj_file} has not been generated."
                     )
                     logging.info("Generate it now ...")
-                    write_sync_trajectory(self.root, seq_name, dataset="tum_rgbd")
+                    write_sync_trajectory(self.root, seq_name, dataset=self.conf.name)
 
                 with open(sync_traj_file, "rb") as f:
                     trainval = pickle.load(f)
@@ -297,7 +296,7 @@ class _Dataset(data.Dataset):
                 self.calib.append(scene["calib"])
 
                 # load or generate synchronized trajectory file
-                datacache_root = osp.join(osp.dirname(__file__), "cache/tum_rgbd")
+                datacache_root = osp.join(osp.dirname(__file__), f"cache/{self.conf.name}")
                 sync_traj_file = osp.join(
                     datacache_root, seq_path, "sync_trajectory.pkl"
                 )
@@ -306,7 +305,7 @@ class _Dataset(data.Dataset):
                         f"Synchronized trajectory file {sync_traj_file} has not been generated."
                     )
                     logging.info("Generate it now ...")
-                    write_sync_trajectory(self.root, seq_name, dataset="tum_rgbd")
+                    write_sync_trajectory(self.root, seq_name, dataset=self.conf.name)
 
                 with open(sync_traj_file, "rb") as f:
                     frames = pickle.load(f)
@@ -433,7 +432,7 @@ class _Dataset(data.Dataset):
         # depth = read_image(path) / 5e3
         depth = cv2.imread(path, cv2.IMREAD_ANYDEPTH).astype(np.float32) / 5e3
         depth, _ = resize(depth, self.conf.resize, interp="nearest")
-        if self.conf.truncate_depth:
+        if self.truncate_depth:
             # the accurate range of kinect depth
             valid_depth = (depth > 0.5) & (depth < 5.0)
             depth = np.where(valid_depth, depth, 0.0)
