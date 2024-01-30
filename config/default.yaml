@@ -1,0 +1,37 @@
+data:
+  dataset_dir: /home/jingkun/Dataset/TUM_RGBD_Dataset
+  select_traj: rgbd_dataset_freiburg1_desk
+  name: TUM_RGBD
+  # dataset_dir: /home/jingkun/Dataset/Bonn_RGBD_Dataset
+  # select_traj: rgbd_bonn_person_tracking
+  # name: Bonn_RGBD
+  # dataset_dir: /home/jingkun/Dataset/CoFusion
+  # select_traj: room4-full
+  # name: CoFusion
+  num_workers: 8
+  category: "train"
+  # batch_szie_per_gpu: 32
+  # keyframes: [1,2,4,8]
+  resize: 0.25
+model:
+  output_scales: [0, 1, 2, 3]  # what scales to adapt and output
+  output_dim: 32  # # of channels in output feature maps
+  view_encoder: "UNet"
+  encoder: 'vgg16'  # string (torchvision net) or list of channels
+  num_downsample: 4  # how many downsample block (if VGG-style net)
+  decoder: [32, 64, 96, 128]  # list of channels of decoder
+  decoder_norm: 'nn.BatchNorm2d'  # normalization ind decoder blocks
+  compute_uncertainty: true
+  checkpointed: true  # whether to use gradient checkpointing
+train:
+  seed: 0
+  epochs: 200
+  log_every_iter: 50
+  eval_every_iter: 500
+  lr: 0.0005
+  median_metrics:
+  - loss/reprojection_error
+  - loss/reprojection_error/init
+  - 3DEPE
+  - RPE_R
+  - RPE_t

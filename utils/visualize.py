@@ -95,6 +95,8 @@ def image_to_display(
         max_intensity = np.nanmax(image)
         image = (image - min_intensity) / (max_intensity - min_intensity)
         image = np.uint8(image * 255)
+    elif np.max(image) == 255:
+        image = image.astype(np.uint8)
     else:
         image = np.clip(image, 0, 1)
         image = (image * 255).astype(np.uint8)

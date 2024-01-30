@@ -20,10 +20,22 @@ import torch
 
 import config
 from geometry.geometry import batch_create_transform, batch_mat2Rt
+from geometry import geometry
 from utils.select_method import select_method
-from run_utils import check_cuda
+from utils.run_utils import check_cuda
 from dataset.dataloader import load_data
 from utils.logger import check_directory
+
+from utils.o3d_rgbd_vo import RGBDOdometry
+from utils.o3d_icp_vo import ICP_Odometry
+from utils import visualize
+from utils.tools import save_trajectory
+
+from kornia.morphology import dilation
+from dataset.cofusion import CoFusion
+
+from models.segmentation import MaskRCNN, SamPrompter
+from torchvision.transforms.functional import resize
 
 
 R_y_180 = np.eye(4, dtype=float)
@@ -41,6 +53,7 @@ class MyScene:
         self.index = 0
         self.video_id = None
         self.last_pose = None
+        self.last_gt_pose = None
         self.camera_transfrom = None
         self.is_gt_tracking = False
         self.init = False
@@ -53,6 +66,8 @@ class MyScene:
         self._init_visualizer()
 
         self.geometries = {}  # list to store PointClouds, Lines, etc.
+
+        self.est_poses = []  # list of timestamp, estimated poses pair
 
     def add_geometry(self, geometry, transform=None, geom_name=None):
         geom = deepcopy(geometry)
@@ -84,6 +99,7 @@ class MyScene:
         self.visualizer.create_window()
         self.vis_ctrl = self.visualizer.get_view_control()
         self.vis_cam = self.vis_ctrl.convert_to_pinhole_camera_parameters()
+        self.visualizer.get_render_option().point_size = 0.5
 
     def update_renderer(self):
         self.vis_cam = self.vis_ctrl.convert_from_pinhole_camera_parameters(
@@ -91,19 +107,6 @@ class MyScene:
         )
         self.visualizer.poll_events()
         self.visualizer.update_renderer()
-
-
-# def init_scene(scene):
-#     scene.geometry = {}
-#     scene.graph.clear()
-#     scene.init = True
-
-#     # clear poses
-#     scene.gt_poses = []
-#     scene.est_poses = []
-#     scene.timestamps = []
-
-#     return scene
 
 
 def camera_transform(transform=None):
@@ -126,7 +129,7 @@ def pointcloud_from_depth(
 
     rows, cols = depth.shape
     c, r = np.meshgrid(np.arange(cols), np.arange(rows), sparse=True)
-    valid = ~np.isnan(depth)
+    valid = ~np.isnan(depth) & (depth > 0)
     z = np.where(valid, depth, np.nan)
     x = np.where(valid, z * (c - cx) / fx, np.nan)
     y = np.where(valid, z * (r - cy) / fy, np.nan)
@@ -136,6 +139,68 @@ def pointcloud_from_depth(
         norm = np.linalg.norm(pc, axis=2)
         pc = pc * (z / norm)[:, :, None]
     return pc
+
+
+def compute_residual(rgb0, dpt0, rgb1, dpt1, K, pose):
+    pose = torch.from_numpy(pose).cuda()
+    R = pose[:3, :3]
+    t = pose[:3, 3:4]
+    pose = [R[None], t[None]]
+
+    B, C, H, W = rgb0.shape
+    px, py = geometry.generate_xy_grid(B, H, W, K)
+    u_warped, v_warped, z_warped = geometry.batch_warp_coord(px, py, dpt0, pose, K)
+
+    # Occlusion
+    occ = geometry.check_occ(
+        z_warped, dpt0, u_warped.type_as(dpt0), v_warped.type_as(dpt0)
+    )
+
+    # Photometric residual
+    rgb1_1to0 = geometry.warp_features(
+        rgb1, u_warped.type_as(dpt0), v_warped.type_as(dpt0)
+    )
+    r_I = torch.mean((rgb1_1to0 - rgb0), dim=1).squeeze()
+    r_I[occ.squeeze()] = 0
+
+    # Geometric residaul
+    dpt1_1to0 = geometry.warp_features(
+        dpt1, u_warped.type_as(dpt0), v_warped.type_as(dpt0)
+    )
+    r_Z = (dpt1_1to0 - z_warped).squeeze()
+    r_Z[occ.squeeze()] = 0
+
+    # 3DEPE
+    v0 = geometry.compute_vertex(dpt0, px, py)
+    v1 = geometry.compute_vertex(dpt1, px, py)
+    x1_warped = torch.mm(R, v1.view(3, H * W)) + t.view(3, 1).expand(3, H * W)
+    r_3depe = torch.norm(x1_warped.view(3, H, W) - v0, dim=1)
+
+    # Point-to-Plane Error
+    v1 = geometry.compute_vertex(dpt1_1to0, px, py)
+    n0 = geometry.compute_normal(v0)
+    # n1 = geometry.compute_normal(v1)
+
+    r_p2p = torch.einsum("ijkl, ijkl -> ikl", v0 - v1, n0).squeeze()
+    r_p2p[occ.squeeze()] = 0
+
+    residual = visualize.create_mosaic(
+        [
+            rgb0[0],
+            torch.abs(r_I),
+            torch.abs(r_Z),
+            torch.abs(r_p2p),
+            occ.logical_not_().squeeze().int(),
+            torch.abs(r_p2p),
+        ],
+        # cmap=["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL"],
+        cmap=cv2.COLORMAP_JET,
+        order="CHW",
+        normalize=True,
+    )
+    cv2.namedWindow("feature-metric residuals", cv2.WINDOW_NORMAL)
+    cv2.imshow("feature-metric residuals", residual)
+    cv2.waitKey(10)
 
 
 def callback(scene: "MyScene"):
@@ -150,11 +215,23 @@ def callback(scene: "MyScene"):
     scene.vis_cam = scene.vis_ctrl.convert_to_pinhole_camera_parameters()
 
     if scene.vo_type == "incremental":
-        batch = dataset[scene.index - 1]
+        batch = dataset[scene.index]
     else:
         batch = dataset.get_keypair(scene.index)
     color0, color1, depth0, depth1, GT_Rt, intrins = check_cuda(batch["data"])
     name = batch["name"]
+
+    # masks0, masks1 ,object_indices0, object_indices1, object_transform = check_cuda(batch["object_info"])
+
+
+    if scene.filter_moving_objects:
+        # color0 = CoFusion.filter_moving_objects(color0, masks0)
+        depth0 = CoFusion.filter_moving_objects(depth0, masks0)
+        # color1 = CoFusion.filter_moving_objects(color1, masks1)
+        depth1 = CoFusion.filter_moving_objects(depth1, masks1)
+
+    # if scene.index > 1:
+    #     return
 
     scene_id = name["seq"]
 
@@ -166,19 +243,24 @@ def callback(scene: "MyScene"):
     else:
         scene.init = False
 
-    GT_WC = dataset.cam_pose_seq[0][scene.index]
+    GT_WC = dataset.cam_pose_seq[0][scene.index]  # ground truth camera pose
     depth_file = dataset.depth_seq[0][scene.index]
     if not options.save_img:
         # half resolution
         rgb = color1.permute((1, 2, 0)).cpu().numpy()
-        depth = imread(depth_file, cv2.IMREAD_ANYDEPTH).astype(np.float32) / 5e3
-        depth = cv2.resize(
-            depth,
-            None,
-            fx=dataset.fx_s,
-            fy=dataset.fy_s,
-            interpolation=cv2.INTER_NEAREST,
-        )
+
+        # depth = (
+        #     imread(depth_file, cv2.IMREAD_ANYDEPTH).astype(np.float32)
+        #     / scene.scale_factor
+        # )
+        # depth = cv2.resize(
+        #     depth,
+        #     None,
+        #     fx=dataset.fx_s,
+        #     fy=dataset.fy_s,
+        #     interpolation=cv2.INTER_NEAREST,
+        # )
+        depth = depth1.squeeze().cpu().numpy()
         valid_depth = (depth > 0.5) & (depth < 5.0)
         depth = np.where(valid_depth, depth, 0.0)
         # print(depth.shape)
@@ -210,6 +292,49 @@ def callback(scene: "MyScene"):
         cv2.imwrite(rgb_img, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
         cv2.imwrite(depth_img, depth)
 
+    ########################################################################
+    ###                           Segmentation                           ###
+    ########################################################################
+    if scene.generate_mask:
+        mask, boxes = scene.maskrcnn(color0[None])  # maskrcnn
+
+        # coords = torch.cat(
+        #     geometry.coord_grid(mask.shape[-2], mask.shape[-1], 1),
+        #     dim=1
+        # ).cuda()
+        # coords = coords[..., mask]
+        # keypoints_tensor = coords.view(1, 2, -1).permute(0, 2, 1)
+        # keypoints_tensor = keypoints_tensor[:, :: 10]
+        # labels = torch.ones(keypoints_tensor.shape[:-1]).cuda()
+
+        # keypoints_tensor = torch.tensor([[[50, 50]]], dtype=torch.float32).cuda()
+        # labels = torch.tensor([[1]], dtype=torch.float32).cuda()
+
+        # mask = scene.samprompter(color0[None], keypoints_tensor, labels)
+        if boxes is not None:
+            mask = scene.samprompter(color0[None], boxes)
+        # mask = scene.samprompter(color0[None], mask[:, None].float())
+
+        # depth0[mask[None]] = 0.
+        # depth1[mask[None]] = 0.
+
+        # kernel = torch.ones(5, 5).cuda()
+        # mask = dilation(mask[None, None], kernel).to(bool).squeeze()
+        # depth[mask.squeeze().cpu()] = 0.
+        # masked_rgb = torch.where(~mask[None], color0, 0.0)
+        # vis_dpt = visualize.create_mosaic(
+        #     [masked_rgb, mask[None].to(int), depth[None]],
+        #     cmap=["NORMAL", "NORMAL", "NORMAL"],
+        #     order="CHW",
+        #     normalize=True,
+        # )
+        # cv2.namedWindow("Masked depth", cv2.WINDOW_NORMAL)
+        # cv2.imshow("Masked depth", vis_dpt)
+        # cv2.waitKey(10)
+
+    ########################################################################
+    ###                              Tracking                            ###
+    ########################################################################
     if scene.init:
         if GT_WC is not None:
             T_WC = GT_WC
@@ -224,6 +349,7 @@ def callback(scene: "MyScene"):
             )
             # T_WC = np.eye(4)
         scene.T_WC = T_WC
+        scene.est_poses.append((dataset.timestamp[0][scene.index], scene.T_WC))
         if scene.vo_type == "keyframe":
             scene.T_WK = T_WC
     else:
@@ -235,23 +361,37 @@ def callback(scene: "MyScene"):
             depth0 = depth0.unsqueeze(dim=0)
             depth1 = depth1.unsqueeze(dim=0)
             intrins = intrins.unsqueeze(dim=0)
-            
+
             if options.save_img:
                 output = scene.network.forward(
                     color0, color1, depth0, depth1, intrins, index=scene.index
                 )
             else:
                 output = scene.network.forward(color0, color1, depth0, depth1, intrins, pose=None)
+
         R, t = output
         if scene.is_gt_tracking:
             T_WC = GT_WC
             scene.T_WC = T_WC
+
+            if scene.last_GT_WC is not None:
+                gt_rel_pose = np.dot(np.linalg.inv(GT_WC), scene.last_GT_WC).astype(
+                    np.float32
+                )
+                if scene.compute_res:
+                    compute_residual(color0, depth0, color1, depth1, intrins, gt_rel_pose)
+            else:
+                if scene.compute_res:
+                    compute_residual(color0, depth0, color1, depth1, intrins, GT_WC)
         else:
             if scene.vo_type == "incremental":
                 T_CR = batch_create_transform(t, R)
                 # T_CR = GT_Rt
                 T_CR = T_CR.squeeze(dim=0).cpu().numpy()
+                if scene.compute_res:
+                    compute_residual(color0, depth0, color1, depth1, intrins, np.eye(4, dtype=np.float32))
                 T_WC = np.dot(scene.T_WC, np.linalg.inv(T_CR)).astype(np.float32)
+                # T_WC = np.dot(scene.T_WC, T_CR)
             elif scene.vo_type == "keyframe":
                 T_CK = batch_create_transform(t, R)
                 # T_CK = GT_Rt
@@ -267,6 +407,7 @@ def callback(scene: "MyScene"):
             else:
                 raise NotImplementedError()
             scene.T_WC = T_WC
+            scene.est_poses.append((dataset.timestamp[0][scene.index], scene.T_WC))
 
     pcd = pointcloud_from_depth(depth, fx=K["fx"], fy=K["fy"], cx=K["ux"], cy=K["uy"])
     nonnan = (~np.isnan(depth)) & (depth > 0)
@@ -277,10 +418,8 @@ def callback(scene: "MyScene"):
     # XYZ->RGB, Z is blue
     if options.dataset == "VaryLighting":
         axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.005)
-    elif options.dataset in ["TUM_RGBD", "ScanNet", "Bonn_RGBD"]:
-        axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.08)
     else:
-        raise NotImplementedError()
+        axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.08)
 
     # two view: keyframe - live frames visualization
     if scene.vo_type == "keyframe" and scene.two_view:
@@ -298,11 +437,19 @@ def callback(scene: "MyScene"):
         scene.add_geometry(geom, transform=T_WC, geom_name="live")
 
         # draw camera trajectory
+        scene.last_GT_WC = np.copy(GT_WC)
+        gt_trs = np.copy(GT_WC[0:3, 3:4]).transpose()
         trs = np.copy(T_WC[0:3, 3:4]).transpose()
-        cam = o3d.geometry.PointCloud()
-        cam.points = o3d.utility.Vector3dVector(trs)
-        cam.colors = o3d.utility.Vector3dVector(RED)
-        scene.add_geometry(cam, geom_name="camera")
+        # cam = o3d.geometry.PointCloud()
+        # cam.points = o3d.utility.Vector3dVector(trs)
+        # cam.colors = o3d.utility.Vector3dVector(RED)
+        # scene.add_geometry(cam, geom_name="camera")
+        # cam_intr = np.array([[K["fx"], 0, K["ux"]],
+        #                      [0, K["fy"], K["uy"]],
+        #                      [0, 0, 1]])
+        # cam = o3d.geometry.LineSet.create_camera_visualization(160, 120, cam_intr, T_WC, 0.07)
+        # cam.colors = o3d.utility.Vector3dVector(RED)
+        # scene.add_geometry(cam, geom_name="camera")
 
         if scene.init:
             scene.add_geometry(axis, transform=T_WC, geom_name="camera_view")
@@ -310,16 +457,37 @@ def callback(scene: "MyScene"):
             scene.update_geometry(axis, transform=T_WC, geom_name="camera_view")
 
         if scene.last_pose is not None:
-            poses_seg = np.concatenate((scene.last_pose, trs), axis=0)
             lines = np.array([[0, 1]])
-            cam_seg = o3d.geometry.LineSet(
-                points=o3d.utility.Vector3dVector(poses_seg),
+            # Visualize ground truth trajectory
+            gt_poses_seg = np.concatenate((scene.last_gt_pose, gt_trs), axis=0)
+            gt_seg = o3d.geometry.LineSet(
+                points=o3d.utility.Vector3dVector(gt_poses_seg),
                 lines=o3d.utility.Vector2iVector(lines),
             )
-            cam_seg.colors = o3d.utility.Vector3dVector(BLUE)
-            # cam_seg = trimesh.load_path(poses_seg)
-            scene.add_geometry(cam_seg, geom_name="trajectory")
+            gt_seg.colors = o3d.utility.Vector3dVector(GREEN)
+            scene.add_geometry(gt_seg, geom_name="gt_trajectory")
+
+            if not scene.is_gt_tracking:
+                # Visualize predicted trajectory
+                poses_seg = np.concatenate((scene.last_pose, trs), axis=0)
+                cam_seg = o3d.geometry.LineSet(
+                    points=o3d.utility.Vector3dVector(poses_seg),
+                    lines=o3d.utility.Vector2iVector(lines),
+                )
+                cam_seg.colors = o3d.utility.Vector3dVector(BLUE)
+                # cam_seg = trimesh.load_path(poses_seg)
+                scene.add_geometry(cam_seg, geom_name="trajectory")
+
+                # Visualize gt pred pose pairs
+                pair = np.concatenate((gt_trs, trs), axis=0)
+                pair_seg = o3d.geometry.LineSet(
+                    points=o3d.utility.Vector3dVector(pair),
+                    lines=o3d.utility.Vector2iVector(lines),
+                )
+                pair_seg.colors = o3d.utility.Vector3dVector(RED)
+                scene.add_geometry(pair_seg, geom_name="gt_pred")
         scene.last_pose = trs
+        scene.last_gt_pose = gt_trs
 
     # A kind of current camera view, but a bit far away to see whole scene.
     # scene.camera.resolution = (rgb.shape[1], rgb.shape[0])
@@ -383,25 +551,31 @@ def callback(scene: "MyScene"):
 
 
 def main(options):
-    conf = {
-        "category": "test",
-        "keyframes": [1],
-        "truncate_depth": True,
-        "grayscale": False,
-        "resize": 0.25,
-        "add_val_dataset": False,
-    }
+    # conf = {
+    #     "category": "full",
+    #     "keyframes": [1],
+    #     "truncate_depth": True,
+    #     "grayscale": False,
+    #     "resize": 0.5,
+    # }
 
     # Load data
     if options.dataset == "TUM_RGBD":
-        sequence = 'rgbd_dataset_freiburg1_desk'
-        # sequence = "rgbd_dataset_freiburg3_walking_xyz"
-        conf["select_traj"] = sequence
-        np_loader = load_data("TUM_RGBD", conf=conf)
+        # sequence = "rgbd_dataset_freiburg1_desk"
+        # sequence = "rgbd_dataset_freiburg1_xyz"
+        sequence = "rgbd_dataset_freiburg3_walking_rpy"
     elif options.dataset == "Bonn_RGBD":
-        sequence = "rgbd_bonn_balloon_tracking"
-        conf["select_traj"] = sequence
-        np_loader = load_data(options.dataset, conf=conf)
+        # sequence = "rgbd_bonn_balloon_tracking"
+        # sequence = "rgbd_bonn_person_tracking2"
+        sequence = "rgbd_bonn_synchronous"
+        # sequence = "rgbd_bonn_placing_nonobstructing_box"
+        # sequence = "rgbd_bonn_static"
+    elif options.dataset == "CoFusion":
+        sequence = "car4-full"
+
+    print(sequence)
+
+    np_loader = load_data(options.dataset, keyframes=[1], load_type='full', select_trajectory=sequence, truncate_depth=True, options=options)
 
     scene = MyScene()
     # scene.visualizer = vis
@@ -417,18 +591,31 @@ def main(options):
     # eval_loaders = create_eval_loaders(options, options.eval_set,
     #                                    [1,], total_batch_size, options.trajectory)
 
-    tracker = select_method(options.vo, options)
+    # tracker = select_method(options.vo, options)
+    # tracker = RGBDOdometry("RGBD")
+    tracker = ICP_Odometry("Point2Point")
     scene.network = tracker
 
     scene.index = 0  # config['start_frame']  # starting frame e.g. 60
     scene.video_id = None
     scene.last_pose = None
+    scene.last_gt_pose = None
+    scene.last_GT_WC = None
+    scene.maskrcnn = MaskRCNN(target_labels=[1])
+    scene.samprompter = SamPrompter()
+    scene.generate_mask = False
+    scene.filter_moving_objects = options.filter_moving_objects
+    scene.compute_res = False
     scene.is_gt_tracking = options.gt_tracker
     scene.init = False  # True only for the first frame
     scene.is_play = True  # immediately start playing when called
     scene.vo_type = options.vo_type
     scene.two_view = options.two_view
     scene.options = options
+
+    scene.scale_factor = (
+        5e3 if scene.options.dataset in ["TUM_RGBD", "Bonn_RGBD"] else 1
+    )
 
     # TODO this looks urgly
     def callback_function(vis):
@@ -452,8 +639,32 @@ def main(options):
                 )
             sys.stdout.flush()
 
+    def save_viewpoint(vis, action, mods):
+        """Key callback funciton to save the viewpoint parameters."""
+        if action == 1:
+            print(
+                "{:<80}".format("Save viewpoint parameters in viewpoint.json"),
+                flush=True,
+            )
+            param = scene.vis_ctrl.convert_to_pinhole_camera_parameters()
+            o3d.io.write_pinhole_camera_parameters("viewpoint.json", param)
+
+    def capture_sceenshot(vis, action, mods):
+        """Load saved viewpoint parameters and capture screenshot"""
+        if action == 1:
+            print(
+                "{:<80}".format("Read viewpoint parameters in viewpoint.json"),
+                flush=True,
+            )
+            param = o3d.io.read_pinhole_camera_parameters("viewpoint.json")
+            scene.vis_ctrl.convert_from_pinhole_camera_parameters(param)
+            print("{:<80}".format("Save screenshot in screenshot.png"), flush=True)
+            scene.visualizer.capture_screen_image("/home/jingkun/Insync/Jingkun_GoogleDrive/MasterThesis/figures/reconstruction/screenshot.png", do_render=True)
+
     scene.visualizer.register_animation_callback(callback_function)
     scene.visualizer.register_key_action_callback(ord("P"), pause_resume)
+    scene.visualizer.register_key_action_callback(ord("V"), save_viewpoint)
+    scene.visualizer.register_key_action_callback(ord("S"), capture_sceenshot)
 
     # if not options.save_img:
     #     # scene.show()
@@ -481,6 +692,8 @@ def main(options):
     #             f.close()
     scene.visualizer.run()
     scene.visualizer.destroy_window()
+    # scene.network.timers.print()
+    save_trajectory(options.dataset + "/" + sequence, scene.est_poses, "ours_nolearning.txt")
 
 
 if __name__ == "__main__":
@@ -491,6 +704,7 @@ if __name__ == "__main__":
     config.add_vo_config(parser)
 
     options = parser.parse_args()
+    options.filter_moving_objects = False
     # to save visualization: --save_img and --vis_feat
     print("---------------------------------------")
     main(options)

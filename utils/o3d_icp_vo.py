@@ -33,16 +33,17 @@ class ICP_Odometry:
         K = o3d.camera.PinholeCameraIntrinsic(width, height, fx, fy, cx, cy)
         return K
 
-    def batch_track(
+    def forward(
         self,
         batch_rgb0,
-        batch_dpt0,
         batch_rgb1,
+        batch_dpt0,
         batch_dpt1,
         batch_K,
         batch_objmask0=None,
         batch_objmask1=None,
         vis_pcd=False,
+        pose=None,
     ):
         assert batch_dpt0.ndim == 4
         B = batch_dpt0.shape[0]
@@ -101,7 +102,7 @@ class ICP_Odometry:
             reg_p2p = o3d_pl.registration.registration_icp(
                 pcd_0,
                 pcd_1,
-                0.02,
+                0.4,
                 odo_init,
                 o3d_pl.registration.TransformationEstimationPointToPoint(),
             )
@@ -153,7 +154,7 @@ class ICP_Odometry:
             reg_p2l = o3d_pl.registration.registration_colored_icp(
                 pcd_0,
                 pcd_1,
-                0.02,
+                0.4,
                 odo_init,
             )
             T_10 = reg_p2l.transformation

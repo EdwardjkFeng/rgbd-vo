@@ -3,7 +3,6 @@ Co-Fusion Dataset
 """
 
 import os
-
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 import os.path as osp
 import glob
@@ -11,20 +10,17 @@ from natsort import natsorted
 import random
 import pickle
 from pathlib import Path
-from omegaconf import OmegaConf
 
 import numpy as np
-import logging
+import torch
 import torch.utils.data as data
+from kornia.morphology import dilation
 
 import cv2
+from cv2 import resize, INTER_NEAREST, imread
 import tqdm
-
-from .base_dataset import BaseDataset
-from .utils import *
 from .dataset_utils import *
 from dataset import logger
-from utils.tools import print_conf
 
 """
 The following scripts use the dirctory structure as:
@@ -65,36 +61,12 @@ def cofusion_sequences_dict():
     }
 
 
-class CoFusion(BaseDataset):
-    default_conf = {
-        "name": "CoFusion",
-        "num_workers": 8,
-        "train_batch_size": 1,
-        "val_batch_size": 1,
-        "test_batch_size": 1,
-        "dataset_dir": "CoFusion/",
-        "select_traj": "room4-full",
-        "category": "test",
-        "keyframes": [1],
-        "truncate_depth": True,
-        "noisy_depth": True,
-        "load_object_data": True,
-        "grayscale": False,
-        "resize": 0.25,
-    }
-
-    def _init(self, conf):
-        print_conf(self.conf)
-
-    def get_dataset(self):
-        return _Dataset(self.conf)
-
-
-class _Dataset(data.Dataset):
-    def __init__(self, conf) -> None:
+class CoFusion(data.Dataset):
+    def __init__(self, basedir = '', category='full', select_traj=None, 
+                 keyframes=[1], data_transform=None, image_resize=0.25, truncate_depth=True, noisy_depth=True, load_object_data=False) -> None:
         super().__init__()
-        self.root = Path(conf.dataset_dir)
-        self.conf = conf
+        
+        self.name = 'CoFusion'
 
         self.image_seq = []  # list(seq) or list(frame) of string (rbg image path)
         self.timestamp = []  # empty
@@ -109,54 +81,59 @@ class _Dataset(data.Dataset):
 
         self.ids = 0
         self.seq_acc_ids = [0]
-        self.keyframes = self.conf.keyframes
+        self.keyframes = keyframes
 
-        if self.conf.category in ["test", "full"]:
-            self.__load_test()
-        elif self.conf.category in ["train", "validation"]:
-            self.__load_train_val()
+        self.transforms = data_transform
+        # downscale the input image to a quarter
+        self.fx_s = image_resize
+        self.fy_s = image_resize
+        self.noisy_depth = noisy_depth
+        self.truncate_depth = truncate_depth
+        self.load_object_data = load_object_data
+
+        if category in ["full"]:
+            self.__load_test(basedir, select_traj)
         else:
             raise NotImplementedError()
 
-        self.truncate_depth = self.conf.truncate_depth
-
         logger.info(
-            f"{self.conf.name} dataloader for {self.conf.category} using keyframe {self.keyframes}: {self.ids} valid frames."
+            "{:} dataloader for dataloader for {:} using keyframe {:}: \
+            {:} valid frames".format(self.name, category, keyframes, self.ids)
         )
 
     def __load_train_val(self):
         raise NotImplementedError()
 
-    def __load_test(self):
+    def __load_test(self, root, select_traj):
         cofusion_data = cofusion_sequences_dict()
         assert len(self.keyframes) == 1
-        kf = self.conf.keyframes[0]
+        kf = self.keyframes[0]
         self.keyframes = [1]
 
         for seq_name, seq_config in cofusion_data.items():
             seq_path = seq_name
 
-            if self.conf.select_traj is not None:
-                if seq_path != self.conf.select_traj:
+            if select_traj is not None:
+                if seq_path != select_traj:
                     continue
 
             self.calib.append(seq_config["calib"])
 
-            images = self.__read_file_list(seq_name, "colour")
+            images = self.__read_file_list(osp.join(root, seq_name), "colour")
             total_num = len(images)
             images = [images[idx] for idx in range(0, total_num, kf)]
 
-            if self.conf.noisy_depth:
+            if self.noisy_depth:
                 depth_dir = "depth_noise"
             else:
                 depth_dir = "depth_original"
             depths = [
-                self.__read_file_list(seq_name, depth_dir)[idx]
+                self.__read_file_list(osp.join(root, seq_name), depth_dir)[idx]
                 for idx in range(0, total_num, kf)
             ]
 
             poses_dict = self.__read_pose_list(
-                osp.join(self.root, seq_name, "trajectories/gt-cam-0.txt")
+                osp.join(root, seq_name, "trajectories/gt-cam-0.txt")
             )
             poses = [
                 tq2mat([v for v in list(poses_dict.values())][idx])
@@ -168,12 +145,14 @@ class _Dataset(data.Dataset):
                 for idx in range(0, total_num, kf)
             ]
 
-            if self.conf.load_object_data:
-                object_masks = self.__read_file_list(seq_name, "mask_id")
+            if self.load_object_data:
+                object_masks = self.__read_file_list(
+                    osp.join(root, seq_name), "mask_id"
+                )
                 object_masks = [object_masks[idx] for idx in range(0, total_num, kf)]
 
-                poses_files = glob.glob(osp.join(self.root, seq_name, "trajectories/*.txt"))
-                poses_files.remove(osp.join(self.root, seq_name, "trajectories/gt-cam-0.txt"))
+                poses_files = glob.glob(osp.join(root, seq_name, "trajectories/*.txt"))
+                poses_files.remove(osp.join(root, seq_name, "trajectories/gt-cam-0.txt"))
 
                 # load object poses
                 object_idx_pose_pair = {}
@@ -214,11 +193,14 @@ class _Dataset(data.Dataset):
         this_idx = frame_idx
         next_idx = frame_idx + random.choice(self.keyframes)
 
-        color0, scale = self.__load_rgb_tensor(self.image_seq[seq_idx][this_idx])
-        color1, _ = self.__load_rgb_tensor(self.image_seq[seq_idx][next_idx])
+        color0 = self.__load_rgb_tensor(self.image_seq[seq_idx][this_idx])
+        color1 = self.__load_rgb_tensor(self.image_seq[seq_idx][next_idx])
 
         depth0 = self.__load_depth_tensor(self.depth_seq[seq_idx][this_idx])
         depth1 = self.__load_depth_tensor(self.depth_seq[seq_idx][next_idx])
+
+        if self.transforms:
+            color0, color1 = self.transforms([color0, color1]) 
 
         # object mask
         masks0 = self.__load_mask_tensor(self.object_mask_seq[seq_idx][this_idx])
@@ -232,15 +214,20 @@ class _Dataset(data.Dataset):
         vis_obj = np.union1d(object_indices0, object_indices1)
         object_transform = {}
         for obj in vis_obj:
-            obj_pose0 = self.object_pose_seq[seq_idx][this_idx][obj]
-            obj_pose1 = self.object_pose_seq[seq_idx][next_idx][obj]
-            object_transform.update(
-                {obj: np.dot(np.linalg.inv(obj_pose1), obj_pose0).astype(np.float32)}
-            )
+            try:
+                obj_pose0 = self.object_pose_seq[seq_idx][this_idx][obj]
+                obj_pose1 = self.object_pose_seq[seq_idx][next_idx][obj]
+                object_transform.update(
+                    {obj: np.dot(np.linalg.inv(obj_pose1), obj_pose0).astype(np.float32)}
+                )
+            except:
+                object_transform.update(
+                    {obj: np.eye(4).astype(np.float32)}
+                )
+
 
         # normalize the coordinate
         calib = np.asarray(self.calib[seq_idx], dtype=np.float32)
-        self.fx_s, self.fy_s = scale
         calib[0] *= self.fx_s
         calib[1] *= self.fy_s
         calib[2] *= self.fx_s
@@ -268,7 +255,7 @@ class _Dataset(data.Dataset):
             "camera_info": camera_info,
         }
 
-        if self.conf.load_object_data:
+        if self.load_object_data:
             data.update({
                 "object_info": [masks0, masks1 ,object_indices0, object_indices1, object_transform]
             })
@@ -279,15 +266,16 @@ class _Dataset(data.Dataset):
 
     def __load_rgb_tensor(self, path):
         """Load the rgb image."""
-        image = read_image(path, self.conf.grayscale) / 255.0
-        image, scale = resize(image, self.conf.resize, interp="linear")
-        image = np.transpose(image, (2, 0, 1))  # channel first convention
-        return image, scale
+        image = imread(path)[:, :, [2, 1, 0]] #RGB
+        image = image.astype(np.float32) / 255.0
+        image = resize(image, None, fx=self.fx_s, fy=self.fy_s)
+        # image = np.transpose(image, (2, 0, 1))  # channel first convention
+        return image
 
     def __load_depth_tensor(self, path):
         """Load depth"""
-        depth = cv2.imread(path, cv2.IMREAD_ANYDEPTH).astype(np.float32)
-        depth, _ = resize(depth, self.conf.resize, interp="nearest")
+        depth = imread(path, cv2.IMREAD_ANYDEPTH).astype(np.float32)
+        depth = resize(depth, None, fx=self.fx_s, fy=self.fy_s, interpolation=INTER_NEAREST)
         if self.truncate_depth:
             # the accurate range of kinect depth
             valid_depth = (depth > 0.5) & (depth < 5.0)
@@ -296,13 +284,13 @@ class _Dataset(data.Dataset):
     
     def __load_mask_tensor(self, path):
         """Load mask"""
-        mask = cv2.imread(path).astype(np.int8)
-        mask, _ = resize(mask, self.conf.resize, interp="nearest")
+        mask = imread(path).astype(np.uint8)[:, :, 0]
+        mask = resize(mask, None, fx=self.fx_s, fy=self.fy_s, interpolation=INTER_NEAREST)
         return mask[None, :]
 
     def __read_file_list(self, seq_name, folder):
         """Read a list of image_paths"""
-        file_list = natsorted(glob.glob(osp.join(self.root, seq_name, folder, "*")))
+        file_list = natsorted(glob.glob(osp.join(seq_name, folder, "*")))
         return file_list
 
     def __read_pose_list(self, posefile):
@@ -317,49 +305,73 @@ class _Dataset(data.Dataset):
         ]
         list = [((int(l[0]), [float(x) for x in l[1:]])) for l in list if len(l) > 1]
         return dict(list)
+    
+    @classmethod
+    def filter_moving_objects(self, image: torch.Tensor, mask: torch.Tensor, dilate_mask: bool = True):
+        if dilate_mask:
+            if len(image.shape) < 4:
+                mask = mask[None]
+            kernel = torch.ones(3, 3).to(mask).float()
+            mask = dilation(mask.float(), kernel)
+            if len(image.shape) < 4:
+                mask = mask.squeeze(0)
+        
+        object_filter = (mask != 0)
+        zero = torch.zeros_like(image)
+        image = torch.where(object_filter, zero, image)
+        # if image.shape[1] == 3:
+        #     image = torch.where(mask_filter, zero, image)
+        return image
 
 
 if __name__ == "__main__":
-    test_conf = {
-        "name": "CoFusion",
-        "num_workers": 8,
-        "train_batch_size": 1,
-        "val_batch_size": 1,
-        "test_batch_size": 1,
-        "dataset_dir": "/home/jingkun/Dataset/CoFusion/",
-        "select_traj": "room4-full",
-        "category": "test",
-        "keyframes": [1],
-        "truncate_depth": True,
-        "noisy_depth": True,
-        "grayscale": False,
-        "resize": 0.25,
-    }
-
-    conf = OmegaConf.create(test_conf)
-
-    loader = [CoFusion(conf).get_dataset()[i] for i in [799, 832]]
     import torchvision.utils as torch_utils
-    from utils.visualize import create_mosaic
+    from dataset.dataloader import image_transforms
 
+    data_transform = image_transforms(['numpy2torch'])
+
+    loader = CoFusion(
+        basedir='/home/jingkun/Dataset/CoFusion',
+        category='full',
+        select_traj='room4-full',
+        keyframes=[1],
+        data_transform=data_transform,
+        image_resize=0.25,
+        truncate_depth=True,
+        noisy_depth=True,
+        load_object_data=True,
+    )
     torch_loader = data.DataLoader(loader, batch_size=1, shuffle=False, num_workers=4)
 
     for batch in torch_loader:
-        item = batch
-        color0, color1, depth0, depth1, transform, calib = item["data"]
+        color0, color1, depth0, depth1, transform, calib = batch["data"]
+
+        masks0, masks1 ,object_indices0, object_indices1, object_transform = batch["object_info"]
+
         B, C, H, W = color0.shape
 
-        bcolor0_img = torch_utils.make_grid(color0, nrow=4)
-        depth0_img = depth0.squeeze().cpu().numpy()
+        color0 = CoFusion.filter_moving_objects(color0, masks0)
+        depth0 = CoFusion.filter_moving_objects(depth0, masks0)
+
+        bcolor0_img = torch_utils.make_grid(color0, nrow=4).numpy().transpose(1, 2, 0)
+        bdepth0_img = torch_utils.make_grid(depth0, nrow=4).numpy().transpose(1, 2, 0)
+
+        bmasks0 = torch_utils.make_grid(masks0, nrow=4).numpy().transpose(1, 2, 0)
 
         import matplotlib.pyplot as plt
 
-        plt.figure()
-        # plt.imshow(bcolor0_img.numpy().transpose(1, 2, 0))
-        plt.axis('off')
-        plt.imshow(depth0_img, cmap="gray")
-        plt.show()
+        # plt.figure()
+        # # plt.imshow(bcolor0_img.numpy().transpose(1, 2, 0))
+        # plt.axis('off')
+        # plt.imshow(bcolor0_img)
+        # plt.show()
 
-        # cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
-        # cv2.imshow("Depth", depth0_img)
-        # cv2.waitKey(10)
+        cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
+        cv2.imshow("Depth", bdepth0_img)
+
+        cv2.namedWindow("RGB", cv2.WINDOW_NORMAL)
+        cv2.imshow("RGB", bcolor0_img[:, :, [2, 1, 0]])
+
+        cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
+        cv2.imshow("Mask", bmasks0)
+        cv2.waitKey(10)

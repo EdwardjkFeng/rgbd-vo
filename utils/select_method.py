@@ -3,7 +3,8 @@ A wrapper to select different methods for comparison
 """
 
 import torch
-from models.LeastSquareTracking import LeastSquareTracking
+# from models.LeastSquareTracking import LeastSquareTracking
+from models.tracking import LeastSquareTracking
 
 from utils.timers import Timers
 
@@ -26,7 +27,7 @@ def select_method(method_name, options):
             solver_type='Direct-Nodamping',
             init_pose_type='identity',
             options=options,
-            # timers=Timers(),
+            timers=Timers(),
         )
         if torch.cuda.is_available(): rgb_tracker.cuda()
         rgb_tracker.eval()

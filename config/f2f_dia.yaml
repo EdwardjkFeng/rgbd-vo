@@ -1,7 +1,0 @@
-data:
-  dataset_dir: /home/jingkun/Dataset/TUM_RGBD_Dataset
-  name: tum_rgbd
-  select_traj: rgbd_dataset_freiburg3_walking_static
-  resize: 1.
-model:
-  output_dim: 16

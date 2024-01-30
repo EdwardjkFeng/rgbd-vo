@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from lietorch import SE3
+
 from models.algorithms import feature_gradient
 
 
@@ -162,6 +164,25 @@ def batch_warp_inverse_depth(px, py, invD0, pose10, K):
     inv_z_ = invD0 / s_.view(B, 1, H, W)
 
     return u_.view(B, 1, H, W), v_.view(B, 1, H, W), inv_z_
+
+
+def batch_warp_coord(px, py, dpt0, pose10, K):
+    [R, t] = pose10
+    B, _, H, W = px.shape
+
+    I = torch.ones((B, 1, H, W)).type_as(dpt0)
+    u_hom = torch.cat((px, py, I), dim=1) * dpt0
+
+    warped = torch.bmm(R, u_hom.view(B, 3, H * W)) + t.view(B, 3, 1).expand(B, 3, H * W)
+
+    x_, y_, z_ = torch.split(warped, 1, dim=1)
+    fx, fy, cx, cy = torch.split(K, 1, dim=1)
+
+    u_ = (x_ / z_).view(B, -1) * fx + cx
+    v_ = (y_ / z_).view(B, -1) * fy + cy
+
+
+    return u_.view(B, 1, H, W), v_.view(B, 1, H, W), z_.view(B, 1, H, W)
 
 
 def check_occ(inv_z_buffer, inv_z_ref, u, v, thres=1e-1, depth_valid=None):

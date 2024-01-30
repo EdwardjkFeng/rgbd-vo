@@ -22,7 +22,7 @@ class RGBDOdometry:
         if mode == "RGBD":
             print("Using RGB-D Odometry")
             self.odo_opt = o3d_pl.odometry.RGBDOdometryJacobianFromColorTerm()
-            self.option = o3d_pl.odometry.OdometryOption(depth_min=0.01, depth_max = 5.0, depth_diff_max=0.8)
+            self.option = o3d_pl.odometry.OdometryOption(depth_min=0.01, depth_max = 5.0, depth_diff_max=0.08)
         elif mode == "ColorICP":  # TODO this part has never been used
             print("Using Hybrid RGB-D Odometry")
             self.odo_opt = o3d_pl.odometry.RGBDOdometryJacobianFromHybridTerm()
@@ -37,16 +37,17 @@ class RGBDOdometry:
         K = o3d.camera.PinholeCameraIntrinsic(width, height, fx, fy, cx, cy)
         return K
 
-    def batch_track(
+    def forward(
         self,
         batch_rgb0,
-        batch_dpt0,
         batch_rgb1,
+        batch_dpt0,
         batch_dpt1,
         batch_K,
         batch_objmask0=None,
         batch_objmask1=None,
         vis_pcd=True,
+        pose=None,
     ):
         assert batch_rgb0.ndim == 4
         B = batch_rgb0.shape[0]
@@ -108,9 +109,9 @@ class RGBDOdometry:
         )
 
         trs = T_10[0:3, 3]
-        if (trs > 1).sum():  # is_success and vis_pcd:
-            print(T_10)
-            print(is_success)
+        # if (trs > 1).sum():  # is_success and vis_pcd:
+            # print(T_10)
+            # print(is_success)
             # pcd_0 = o3d.geometry.PointCloud.create_from_rgbd_image(
             #     rgbd_0, intrinsic)
             # pcd_0.transform(T_10)

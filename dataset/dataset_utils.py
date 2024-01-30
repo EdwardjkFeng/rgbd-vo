@@ -17,7 +17,7 @@ def tq2mat(tq):
     return T
 
 
-def write_sync_trajectory(local_dir, subject_name, dataset=None):
+def write_sync_trajectory(local_dir, subject_name, dataset=None, max_diff=0.02):
     """Generate synchronized trajectories.
 
     Args:
@@ -39,7 +39,7 @@ def write_sync_trajectory(local_dir, subject_name, dataset=None):
     pose_list = read_file_list(pose_file)
 
     matches = associate_three(
-        rgb_list, depth_list, pose_list, offset=0.0, max_difference=0.02
+        rgb_list, depth_list, pose_list, offset=0.0, max_difference=max_diff
     )
 
     trajectory_info = []
@@ -148,8 +148,8 @@ def associate(first_list, second_list, offset, max_difference):
     matches = []
     for diff, a, b in potential_matches:
         if a in first_keys and b in second_keys:
-            # first_keys.remove(a)
-            # second_keys.remove(b)
+            first_keys.remove(a)
+            second_keys.remove(b)
             matches.append((a, b))
 
     matches.sort()
@@ -172,7 +172,18 @@ def associate_three(first_list, second_list, third_list, offset, max_difference)
     third_keys = list(third_list)
 
     # find the potential matches in (rgb, depth)
-    matches_ab = associate(first_list, second_list, offset, max_difference)
+    # matches_ab = associate(first_list, second_list, offset, max_difference)
+    potential_matches_ab = [(abs(a - (b + offset)), a, b)
+                            for a in first_keys
+                            for b in second_keys
+                            if abs(a - (b + offset)) < max_difference]
+    potential_matches_ab.sort()
+    matches_ab = []
+    for diff, a, b in potential_matches_ab:
+        if a in first_keys and b in second_keys:
+            matches_ab.append((a, b))
+
+    matches_ab.sort()
 
     # find the potential matches in (rgb, depth, pose)
     potential_matches = [

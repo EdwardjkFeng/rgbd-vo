@@ -745,16 +745,16 @@ def feature_gradient(F, normalize_gradient=True):
 
     sobel = torch.asarray([[-1, 0, 1], 
                            [-2, 0, 2], 
-                           [-1, 0, 1]]).view(1, 1, 3, 3).to(F)
+                           [-1, 0, 1]]).view(1, 1, 3, 3).to(F) / 8
 
     F_pad = func.pad(F.view(-1, 1, H, W), (1, 1, 1, 1), mode="replicate")
     dF_dx = func.conv2d(F_pad, sobel, stride=1, padding=0)
     dF_dy = func.conv2d(F_pad, sobel.transpose(2, 3), stride=1, padding=0)
 
-    if normalize_gradient:
-        mag = torch.sqrt((dF_dx**2) + (dF_dy**2) + 1e-8)
-        dF_dx = dF_dx / mag
-        dF_dy = dF_dy / mag
+    # if normalize_gradient:
+    #     mag = torch.sqrt((dF_dx**2) + (dF_dy**2) + 1e-8)
+    #     dF_dx = dF_dx / mag
+    #     dF_dy = dF_dy / mag
 
     return dF_dx.view(B, C, H, W), dF_dy.view(B, C, H, W)
 

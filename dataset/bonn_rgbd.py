@@ -1,24 +1,19 @@
-"""Bonn dataset"""
-import sys, os
-import random
+""" Bonn dataset"""
+import sys, os, random
 import pickle
-from pathlib import Path
-from omegaconf import OmegaConf
-from typing import Optional, Union
 
-import cv2
 import numpy as np
-import logging
-from tqdm import tqdm
-
+import os.path as osp
 import torch.utils.data as data
-from transforms3d import quaternions
 
-from .base_dataset import BaseDataset
-from .utils import *
-from .dataset_utils import *
+# from imageio import imread
+import cv2
+from tqdm import tqdm
+from transforms3d import quaternions
+from cv2 import resize, INTER_NEAREST, imread
+
 from dataset import logger
-from utils.tools import print_conf
+from .dataset_utils import *
 
 
 """
@@ -106,35 +101,61 @@ def bonn_test_dict():
         },
     }
 
-
-class Bonn(BaseDataset):
-    default_conf = {
-        "name": "Bonn",
-        "num_workers": 8,
-        "train_batch_size": 1,
-        "val_batch_size": 1,
-        "test_batch_size": 1,
-        "dataset_dir": "Bonn_RGBD_Dataset/",
-        "select_traj": "rgbd_bonn_balloon",
-        "category": "test",
-        "keyframes": [1],
-        "truncate_depth": True,
-        "grayscale": False,
-        "resize": 0.25,
+def bonn_trainval_static_dict():
+    return {
+        "scene": {
+            "calib": [542.822841, 542.576870, 315.593520, 237.756098],
+            "seq": [
+                "rgbd_bonn_static",
+                "rgbd_bonn_static_close_far",
+            ],
+        },
     }
 
-    def _init(self, conf):
-        print_conf(self.conf)
+def bonn_trainval_dynamic_dict():
+    return {
+        "scene": {
+            "calib": [542.822841, 542.576870, 315.593520, 237.756098],
+            "seq": [
+                "rgbd_bonn_crowd",
+                "rgbd_bonn_kidnapping_box2",
+                "rgbd_bonn_moving_nonobstructing_box",
+                "rgbd_bonn_placing_obstructing_box",
+                # "rgbd_bonn_static",
+                "rgbd_bonn_balloon",
+                "rgbd_bonn_placing_nonobstructing_box3",
+                "rgbd_bonn_moving_nonobstructing_box2",
+                "rgbd_bonn_balloon_tracking",
+                "rgbd_bonn_moving_obstructing_box",
+                # "rgbd_bonn_person_tracking2",
+                "rgbd_bonn_removing_nonobstructing_box",
+                "rgbd_bonn_placing_nonobstructing_box2",
+                "rgbd_bonn_synchronous",
+                # "rgbd_bonn_crowd3",
+                "rgbd_bonn_removing_obstructing_box",
+                # "rgbd_bonn_placing_nonobstructing_box",
+                # "rgbd_bonn_balloon2",
+                "rgbd_bonn_crowd2",
+                "rgbd_bonn_synchronous2",
+                "rgbd_bonn_removing_nonobstructing_box2",
+                # "rgbd_bonn_static_close_far",
+                "rgbd_bonn_moving_obstructing_box2",
+                "rgbd_bonn_kidnapping_box",
+                "rgbd_bonn_person_tracking",
+                # "rgbd_bonn_balloon_tracking2",
+            ],
+        },
+    }
 
-    def get_dataset(self):
-        return _Dataset(self.conf)
 
+class Bonn(data.Dataset):
 
-class _Dataset(data.Dataset):
-    def __init__(self, conf) -> None:
+    def __init__(self, basedir = '', category='train', setup=None, 
+                 select_traj=None, keyframes=[1], data_transform=None, 
+                 image_resize=0.25, truncate_depth=True) -> None:
         super().__init__()
-        self.root = Path(conf.dataset_dir)
-        self.conf = conf
+
+        self.name = 'Bonn_RGBD'
 
         self.image_seq = []  # list(seq) or list(frame) of string (rbg image path)
         self.timestamp = []  # empty
@@ -146,44 +167,55 @@ class _Dataset(data.Dataset):
 
         self.ids = 0
         self.seq_acc_ids = [0]
-        self.keyframes = self.conf.keyframes
+        self.keyframes = keyframes
 
-        if self.conf.category in ["test", "full"]:
-            self.__load_test()
-        elif self.conf.category in ["train", "validation"]:
-            self.__load_train_val()
+        self.transforms = data_transform
+        self.fx_s = image_resize
+        self.fy_s = image_resize
+        self.truncate_depth = truncate_depth
+
+        if category in ["test", "full"]:
+            self.__load_test(basedir, category, select_traj)
+        elif category in ["train", "validation"]:
+            self.__load_train_val(basedir, category, setup, 
+                                  select_traj=select_traj)
         else:
             raise NotImplementedError()
 
-        self.truncate_depth = self.conf.truncate_depth
-
         logger.info(
-            f"{self.conf.name} dataloader for {self.conf.category} using keyframe {self.keyframes}: {self.ids} valid frames."
+            "{:} dataloader for {:} using keyframe {:}: {:} valid frames.".format(self.name, category, keyframes, self.ids)
         )
 
-    def __load_train_val(self):
-        bonn_data = bonn_trainval_dict()
+    def __load_train_val(self, root, category, setup=None, select_traj=None):
+
+        if setup == 'static':
+            bonn_data = bonn_trainval_static_dict()
+        elif setup == 'dynamic':
+            bonn_data = bonn_trainval_dynamic_dict()
+        else:
+            bonn_data = bonn_trainval_dict()
+
         for seq_name in bonn_data["scene"]["seq"]:
             seq_path = seq_name
-            if self.conf.select_traj is not None:
-                if seq_path != self.conf.select_traj:
+            if select_traj is not None:
+                if seq_path != select_traj:
                     continue
 
             self.calib.append(bonn_data["scene"]["calib"])
-            datacache_root = osp.join(osp.dirname(__file__), f"cache/{self.conf.name}")
+            datacache_root = osp.join(osp.dirname(__file__), f"cache/{self.name}")
             sync_traj_file = osp.join(datacache_root, seq_path, "sync_trajectory.pkl")
             if not osp.isfile(sync_traj_file):
                 logger.info(
                     f"Synchronized trajectory file {sync_traj_file} has not been generated."
                 )
-                logging.info("Generate it now ...")
-                write_sync_trajectory(self.root, seq_name, dataset=self.conf.name, max_diff=0.1)
+                logger.info("Generate it now ...")
+                write_sync_trajectory(root, seq_name, dataset=self.name, max_diff=0.02)
 
             with open(sync_traj_file, "rb") as f:
                 trainval = pickle.load(f)
                 total_num = len(trainval)
                 train_ids, val_ids = self.__gen_trainval_index(total_num)
-                if self.conf.category == "train":
+                if category == "train":
                     ids = train_ids
                 else:
                     ids = val_ids
@@ -210,25 +242,30 @@ class _Dataset(data.Dataset):
         print(len(train_ids), len(val_ids))
         return train_ids, val_ids
 
-    def __load_test(self):
-        bonn_data = bonn_sequences_dict()
+    def __load_test(self, root, category='test', select_traj=None):
+
+        if category == 'full':
+            bonn_data = bonn_sequences_dict()
+        else:
+            bonn_data = bonn_test_dict()
         assert len(self.keyframes) == 1
-        kf = self.conf.keyframes[0]
+        kf = self.keyframes[0]
         self.keyframes = [1]
 
         for ks, scene in bonn_data.items():
             for seq_name in scene["seq"]:
                 seq_path = seq_name
+                if seq_name == 'None':
+                    continue
 
-                if self.conf.select_traj is not None:
-                    if seq_path != self.conf.select_traj:
-                        continue
+                if select_traj is not None and seq_path != select_traj:
+                    continue
 
                 self.calib.append(scene["calib"])
 
                 # load or generate synchronized trajectory file
                 datacache_root = osp.join(
-                    osp.dirname(__file__), f"cache/{self.conf.name}"
+                    osp.dirname(__file__), f"cache/{self.name}"
                 )
                 sync_traj_file = osp.join(
                     datacache_root, seq_path, "sync_trajectory.pkl"
@@ -237,8 +274,8 @@ class _Dataset(data.Dataset):
                     logger.info(
                         f"Synchronized trajectory file {sync_traj_file} has not been generated."
                     )
-                    logging.info("Generate it now ...")
-                    write_sync_trajectory(self.root, seq_name, dataset=self.conf.name, max_diff=0.1)
+                    logger.info("Generate it now ...")
+                    write_sync_trajectory(root, seq_name, dataset=self.name, max_diff=0.02)
 
                 with open(sync_traj_file, "rb") as f:
                     frames = pickle.load(f)
@@ -264,12 +301,12 @@ class _Dataset(data.Dataset):
         if len(self.image_seq) == 0:
             logger.warn(
                 "The specified trajectory {:} is not in the test set."
-                "\nTry to support this customized dataset".format(self.conf.select_traj)
+                "\nTry to support this customized dataset".format(select_traj)
             )
-            if osp.exists(osp.join(self.root, self.conf.select_traj)):
+            if osp.exists(osp.join(root, select_traj)):
                 self.calib.append(bonn_sequences_dict()["default"]["calib"])
-                sync_traj_file = osp.join(self.root, self.conf.select_traj)
-                seq_name = seq_path = osp.basename(self.conf.select_traj)
+                sync_traj_file = osp.join(root, select_traj)
+                seq_name = seq_path = osp.basename(select_traj)
                 if not osp.isfile(sync_traj_file):
                     logger.info(
                         "The synchronized trajctory file {:} has not been generated.".format(
@@ -277,7 +314,7 @@ class _Dataset(data.Dataset):
                         )
                     )
                     logger.info("Generate it now ...")
-                    write_sync_trajectory(self.root, self.conf.select_traj, max_diff=0.1)
+                    write_sync_trajectory(root, select_traj, max_diff=0.1)
 
                 with open(sync_traj_file, "rb") as p:
                     frames = pickle.load(p)
@@ -304,6 +341,53 @@ class _Dataset(data.Dataset):
                     "The specified trajectory is not in the test set nor a supported customized dataset"
                 )
 
+    def get_keypair(self, index, kf_idx=0):
+        # pair in the way like [[1, 3], [1, 5], [1, 7],...[1, N]]
+        seq_idx = max(np.searchsorted(self.seq_acc_ids, index + 1) - 1, 0)
+        frame_idx = index - self.seq_acc_ids[seq_idx]
+
+        this_idx = kf_idx
+        next_idx = frame_idx
+
+        color0 = self.__load_rgb_tensor(self.image_seq[seq_idx][this_idx])
+        color1 = self.__load_rgb_tensor(self.image_seq[seq_idx][next_idx])
+
+        depth0 = self.__load_depth_tensor(self.depth_seq[seq_idx][this_idx])
+        depth1 = self.__load_depth_tensor(self.depth_seq[seq_idx][next_idx])
+
+        if self.transforms:
+            color0, color1 = self.transforms([color0, color1])
+
+            # normalize the coordinate
+        calib = np.asarray(self.calib[seq_idx], dtype=np.float32)
+        calib[0] *= self.fx_s
+        calib[1] *= self.fy_s
+        calib[2] *= self.fx_s
+        calib[3] *= self.fy_s
+
+        cam_pose0 = self.cam_pose_seq[seq_idx][this_idx]
+        cam_pose1 = self.cam_pose_seq[seq_idx][next_idx]
+        transform = np.dot(np.linalg.inv(cam_pose1), cam_pose0).astype(np.float32)
+
+        name = {'seq': self.seq_names[seq_idx],
+                'frame0': this_idx,
+                'frame1': next_idx}
+
+        # camera_info = dict()
+        camera_info = {"height": color0.shape[0],
+                       "width": color0.shape[1],
+                       "fx": calib[0],
+                       "fy": calib[1],
+                       "ux": calib[2],
+                       "uy": calib[3]}
+        
+        data = {
+            "name": name,
+            "data": [color0, color1, depth0, depth1, transform, calib],
+            "camera_info": camera_info,
+        }
+        return data
+
     def __getitem__(self, idx):
         seq_idx = max(np.searchsorted(self.seq_acc_ids, idx + 1) - 1, 0)
         frame_idx = idx - self.seq_acc_ids[seq_idx]
@@ -311,15 +395,17 @@ class _Dataset(data.Dataset):
         this_idx = frame_idx
         next_idx = frame_idx + random.choice(self.keyframes)
 
-        color0, scale = self.__load_rgb_tensor(self.image_seq[seq_idx][this_idx])
-        color1, _ = self.__load_rgb_tensor(self.image_seq[seq_idx][next_idx])
+        color0 = self.__load_rgb_tensor(self.image_seq[seq_idx][this_idx])
+        color1= self.__load_rgb_tensor(self.image_seq[seq_idx][next_idx])
 
         depth0 = self.__load_depth_tensor(self.depth_seq[seq_idx][this_idx])
         depth1 = self.__load_depth_tensor(self.depth_seq[seq_idx][next_idx])
 
+        if self.transforms:
+            color0, color1 = self.transforms([color0, color1])
+
         # normalize the coordinate
         calib = np.asarray(self.calib[seq_idx], dtype=np.float32)
-        self.fx_s, self.fy_s = scale
         calib[0] *= self.fx_s
         calib[1] *= self.fy_s
         calib[2] *= self.fx_s
@@ -352,24 +438,23 @@ class _Dataset(data.Dataset):
         return self.ids
 
     def __load_rgb_tensor(self, path):
-        """Load the rgb image."""
-        image = read_image(path, self.conf.grayscale) / 255.0
-        image, scale = resize(image, self.conf.resize, interp="linear")
-        image = np.transpose(image, (2, 0, 1))  # channel first convention
-        return image, scale
+        """ Load the rgb image. """
+        image = imread(path)[:, :, [2, 1, 0]]
+        image = image.astype(np.float32) / 255.0
+        image = resize(image, None, fx=self.fx_s, fy=self.fy_s)
+        return image
 
     def __load_depth_tensor(self, path):
         """Load depth:
         The depth images are scaled by a factor of 5000, i.e., a pixel value of 5000 in the depth image corresponds to a distance of 1 meter from the camera, 10000 to 2 meter distance, etc. A pixel value of 0 means missing value/no data.
         """
         # depth = read_image(path) / 5e3
-        depth = cv2.imread(path, cv2.IMREAD_ANYDEPTH).astype(np.float32) / 5e3
-        depth, _ = resize(depth, self.conf.resize, interp="nearest")
-        if self.conf.truncate_depth:
-            # the accurate range of kinect depth
-            valid_depth = (depth > 0.5) & (depth < 5.0)
+        depth = imread(path, cv2.IMREAD_ANYDEPTH).astype(np.float32) / 5e3
+        depth = resize(depth, None, fx=self.fx_s, fy=self.fy_s, interpolation=INTER_NEAREST)
+        if self.truncate_depth:
+            valid_depth = (depth > 0.5) & (depth < 5.0) # the accurate range of kinect depth
             depth = np.where(valid_depth, depth, 0.0)
-        return depth[None, :]  # channel first convention
+        return depth[None, :]  
 
 
     def __tq2mat(self, tq):
@@ -398,3 +483,33 @@ class _Dataset(data.Dataset):
             0         0         0    1.0000"
         )
         return T_ros * T * T_ros * T_m
+
+
+if __name__ == '__main__': 
+    import torchvision.utils as torch_utils
+    from dataset.dataloader import image_transforms
+    # seqs = []
+    # seq_names = bonn_trainval_static_dict()['scene']['seq']
+    # seq_names = [name[10:] for name in seq_names]
+    # seqs += (seq_names)
+    # print(seqs)
+
+    data_transform = image_transforms(['color_augment', 'numpy2torch'])
+
+    loader = Bonn(basedir='/home/jingkun/Dataset/Bonn_RGBD_Dataset', category='test', setup=None, keyframes=[1], data_transform=data_transform)
+ 
+    torch_loader = data.DataLoader(loader, batch_size=16, 
+        shuffle=False, num_workers=4)
+
+    for batch in torch_loader: 
+        name = batch["name"]
+        color0, color1, depth0, depth1, transform, K = batch["data"]
+        B, C, H, W = color0.shape
+        print(color0.shape)
+
+        bcolor0_img = torch_utils.make_grid(color0, nrow=4)
+
+        import matplotlib.pyplot as plt
+        plt.figure()
+        plt.imshow(bcolor0_img.numpy().transpose(1,2,0))
+        plt.show()

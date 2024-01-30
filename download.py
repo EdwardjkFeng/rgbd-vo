@@ -26,6 +26,7 @@ TUM_RGBD_Sequences = {
         "rgbd_dataset_freiburg1_room",
         "rgbd_dataset_freiburg1_rpy",
         "rgbd_dataset_freiburg1_xyz",
+        "rgbd_dataset_freiburg1_teddy",
     ],
     "freiburg2": [
         "rgbd_dataset_freiburg2_360_hemisphere",
@@ -45,7 +46,7 @@ TUM_RGBD_Sequences = {
     "freiburg3": [
         "rgbd_dataset_freiburg3_long_office_household",
         # "rgbd_dataset_freiburg3_nostructure_notexture_far",
-        # "rgbd_dataset_freiburg3_nostructure_notexture_near",
+        # "rgbd_dataset_freiburg3_nostructure_notexture_near_withloop",
         # "rgbd_dataset_freiburg3_nostructure_texture_far",
         # "rgbd_dataset_freiburg3_nostructure_texture_near",
         "rgbd_dataset_freiburg3_sitting_halfsphere",
@@ -138,53 +139,53 @@ Oxford_Multimotion_sequences = {
             '1ntklaWH3VOlnkxG3k2D8vKiq7GgWbQPM', '1Ly_SkLeydeYBCSPduokAKL_PkD-LMqkl', '142Rsb8T8IyWr0dTKiAAeMWLkTmODg94T'
         ],
     },
-    'secondary': {
-        'calibration_extrinsic_no_imu': [ 
-            '1CW9p4ku1IWqbISLOJd4OnqsG5XqItdYn', '1uPBEWFGbQqLFc5d2kWu7hiOnNjIdt3Nk'
-        ],
-        'calibration_extrinsic': [
-            '1CpNiqrX8Jqcjxtmy-2SzcD7XwYTG7N5B', '1xFY-E-F0o3_oXqgfrkwKWOVpU62e0pHm', '1D379VPgxy3TFphhUiqyBQbVUWFsCPR1x'
-        ],
-        'calibration_vicon_no_imu': [
-            '1_cJOBulEHDFHZ4IdiubphTDBlmEeVTLn', '1zCL9B27KVMw1vTZ34fkc9l1js7o7P_Hl'
-        ],
-        'pinwheel_1_unconstrained': [
-            '1A1JfKDAsUkmZAvn_yE-fcc0NybDMFFX7', '1gFhwfZEKR893Ir2PaJbD2HnVsXHObpeO', '1aN7DDn1eqmUQo2SNMuP7Obm-bxKdcWBP'
-        ],
-        'pinwheel_1_static': [
-            '1rQbZ4MfjYNpNDTE7HT0Xk3x72CzS1yOz', '1Kpyh1Ney8sowXGGpcGvN5FvycaU_yTOy', '15ctKENVEImPzEbnjU6d5hHrrKLaWLHbg'
-        ],
-        'fixed_occlusion_1_unconstrained': [
-            '1yY3ZqxUEEVEZoWdebes-pDKIr8tgEnCL', '1CaQURsZPTpA_CbUithFxfjlfHKfQbdvv', '16xU_ComEKtbiccucZYj8Q8_wjY44_tDH'
-        ],
-        'fixed_occlusion_1_static': [
-            '1T3u2ZH0WmL1mba9uQvmC6ExpABVfkm7P', '1OvL9sOIfqYQuqV78gca04rtuxCkdyY_f', '1W7R42jGIyIpt1rb_t9fiQA8fJskmzXmQ'
-        ],
-        'fixed_occlusion_1_translational': [
-            '1rnaMIDwc9B37_Ukza2-2TO9zM0qWf-Nn', '1WQ2-Bzu2He8zVwO23QNQV156yESPd-ds', '19iy74JtolhwEKNLEZz5Okk5hvVgnfhyW'
-        ],
-        'cars_1_unconstrained': [
-            '1oJngwPyeETpYCA_CHpBD2GXkXggPD5wE', '1IhHBhXX8BiISMIcOOKUAuNW_NzFMzV5f', '1GOxXFS7slmRxUyP6AYBUFyBNDlir1OU5'
-        ],
-        'calibration_vicon': [
-            '1XWPizQj044jtLN3ccrneSIBJFRiIvTpj', '1_T1e2hGiofwqVtsW4KlPEjZ4qv8RWwIG', '1mkF_0aSuiJn7lMfam_KrW-xs9yB1hNXt'
-        ],
-        'occlusion_2_unconstrained_no_imu': [
-            '1VfpZexT629ptlfc8CRpLVaTVPcL4kC6X', '1LN2priMS3ynXt9d2H44jajCN6xLBi8Js'
-        ],
-        'cars_6_robot_no_imu': [
-            '10Xbn1BlwXuPO2B37yvuDzUeMaKYHzn0B', '1IRHfAU-GuzoFdvZJS1xAc7kZaVBePCY4'
-        ],
-        'cars_6_unconstrained_no_imu': [
-            '1lRXhGac90fl1bCNUmxavL7D1mSgfYqb3', '15N08qZFj_axl-GBzdcu2RrZrVvllS2E5'
-        ],
-        'cars_2_static_no_imu': [
-            '1QGR1kF2SsEHtco2a-rnoCOqj9TdApl1R', '112RH4X1Q7Rxrrfg5QOlgOpykstyYTTlv'
-        ],
-        'cars_6_static_no_imu': [
-            '1Ep59Nhp6xfDMOtcos4vAxYopG2ZqJssA', '1U3HsPk8MA3Dnf6S6iBlqmFyTdxvsZX-U'
-        ],
-    },
+    # 'secondary': {
+    #     'calibration_extrinsic_no_imu': [ 
+    #         '1CW9p4ku1IWqbISLOJd4OnqsG5XqItdYn', '1uPBEWFGbQqLFc5d2kWu7hiOnNjIdt3Nk'
+    #     ],
+    #     'calibration_extrinsic': [
+    #         '1CpNiqrX8Jqcjxtmy-2SzcD7XwYTG7N5B', '1xFY-E-F0o3_oXqgfrkwKWOVpU62e0pHm', '1D379VPgxy3TFphhUiqyBQbVUWFsCPR1x'
+    #     ],
+    #     'calibration_vicon_no_imu': [
+    #         '1_cJOBulEHDFHZ4IdiubphTDBlmEeVTLn', '1zCL9B27KVMw1vTZ34fkc9l1js7o7P_Hl'
+    #     ],
+    #     'pinwheel_1_unconstrained': [
+    #         '1A1JfKDAsUkmZAvn_yE-fcc0NybDMFFX7', '1gFhwfZEKR893Ir2PaJbD2HnVsXHObpeO', '1aN7DDn1eqmUQo2SNMuP7Obm-bxKdcWBP'
+    #     ],
+    #     'pinwheel_1_static': [
+    #         '1rQbZ4MfjYNpNDTE7HT0Xk3x72CzS1yOz', '1Kpyh1Ney8sowXGGpcGvN5FvycaU_yTOy', '15ctKENVEImPzEbnjU6d5hHrrKLaWLHbg'
+    #     ],
+    #     'fixed_occlusion_1_unconstrained': [
+    #         '1yY3ZqxUEEVEZoWdebes-pDKIr8tgEnCL', '1CaQURsZPTpA_CbUithFxfjlfHKfQbdvv', '16xU_ComEKtbiccucZYj8Q8_wjY44_tDH'
+    #     ],
+    #     'fixed_occlusion_1_static': [
+    #         '1T3u2ZH0WmL1mba9uQvmC6ExpABVfkm7P', '1OvL9sOIfqYQuqV78gca04rtuxCkdyY_f', '1W7R42jGIyIpt1rb_t9fiQA8fJskmzXmQ'
+    #     ],
+    #     'fixed_occlusion_1_translational': [
+    #         '1rnaMIDwc9B37_Ukza2-2TO9zM0qWf-Nn', '1WQ2-Bzu2He8zVwO23QNQV156yESPd-ds', '19iy74JtolhwEKNLEZz5Okk5hvVgnfhyW'
+    #     ],
+    #     'cars_1_unconstrained': [
+    #         '1oJngwPyeETpYCA_CHpBD2GXkXggPD5wE', '1IhHBhXX8BiISMIcOOKUAuNW_NzFMzV5f', '1GOxXFS7slmRxUyP6AYBUFyBNDlir1OU5'
+    #     ],
+    #     'calibration_vicon': [
+    #         '1XWPizQj044jtLN3ccrneSIBJFRiIvTpj', '1_T1e2hGiofwqVtsW4KlPEjZ4qv8RWwIG', '1mkF_0aSuiJn7lMfam_KrW-xs9yB1hNXt'
+    #     ],
+    #     'occlusion_2_unconstrained_no_imu': [
+    #         '1VfpZexT629ptlfc8CRpLVaTVPcL4kC6X', '1LN2priMS3ynXt9d2H44jajCN6xLBi8Js'
+    #     ],
+    #     'cars_6_robot_no_imu': [
+    #         '10Xbn1BlwXuPO2B37yvuDzUeMaKYHzn0B', '1IRHfAU-GuzoFdvZJS1xAc7kZaVBePCY4'
+    #     ],
+    #     'cars_6_unconstrained_no_imu': [
+    #         '1lRXhGac90fl1bCNUmxavL7D1mSgfYqb3', '15N08qZFj_axl-GBzdcu2RrZrVvllS2E5'
+    #     ],
+    #     'cars_2_static_no_imu': [
+    #         '1QGR1kF2SsEHtco2a-rnoCOqj9TdApl1R', '112RH4X1Q7Rxrrfg5QOlgOpykstyYTTlv'
+    #     ],
+    #     'cars_6_static_no_imu': [
+    #         '1Ep59Nhp6xfDMOtcos4vAxYopG2ZqJssA', '1U3HsPk8MA3Dnf6S6iBlqmFyTdxvsZX-U'
+    #     ],
+    # },
 }
 
 Oxford_Multimotion_calibration = {
@@ -235,12 +236,19 @@ def download_from_google_drive(id: str, save_path: Path,
 
 
 def extract_tar(tarpath: Path, extract_path: Optional[Path] = None,
-                remove: bool = True):
+                remove: bool = True, file_type: str='tgz'):
     if extract_path is None:
         extract_path = tarpath.parent
     print('Extracting ', tarpath)
-    with tarfile.open(tarpath, 'r') as f:
-        f.extractall(extract_path)
+    if file_type == 'tgz':
+        with tarfile.open(tarpath, 'r') as f:
+            f.extractall(extract_path)
+    elif file_type == 'zip':
+        with zipfile.ZipFile(tarpath, 'r') as f:
+            f.extractall(extract_path)
+    else:
+        raise NotImplementedError(file_type)
+    
     if remove:
         tarpath.unlink()
 
@@ -280,13 +288,13 @@ def download_Bonn_RGBD(datapath, sequences_to_download: Optional[list] = None):
 
     out_path.mkdir(exist_ok=True, parents=True)
     print('Downloading the Bonn RGB-D Dataset...')
-    for sequence in sequence:
+    for sequence in sequences:
         # Check if sequence is already downloaded
         if os.path.exists(os.path.join(out_path, sequence)):
             print(f"{sequence} already exists, skip...")
             continue
         download_from_url(url + f'{sequence}.zip', out_path)
-        extract_tar(out_path / f'{sequence}.zip', out_path)
+        extract_tar(out_path / f'{sequence}.zip', out_path, file_type='zip')
 
 
 def download_Oxford_Multimotion(datapath, sequences_to_download: Optional[list] = None):

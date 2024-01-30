@@ -2,6 +2,9 @@
 Flexible UNet model which takes any Torchvision backbone as encoder.
 Predicts multi-level feature and uncertainty maps
 and makes sure that they are well aligned.
+
+Credits to:
+Modified by: Jingkun Feng
 """
 
 import torchvision
@@ -52,7 +55,7 @@ class AdaptationBlock(nn.Sequential):
 
 class UNet(BaseModel):
     default_conf = {
-        'output_scales': [0, 2, 4],  # what scales to adapt and output
+        'output_scales': [0, 1, 2, 3],  # what scales to adapt and output
         'output_dim': 128,  # # of channels in output feature maps
         'encoder': 'vgg16',  # string (torchvision net) or list of channels
         'num_downsample': 4,  # how many downsample block (if VGG-style net)
@@ -107,7 +110,10 @@ class UNet(BaseModel):
             block4 = encoder.layer3
             blocks = [block1, block2, block3, block4]
             encoder = [torch.nn.Identity()] + [Block(b) for b in blocks]
-            skip_dims = [3, 64, 256, 512, 1024]
+            if conf.encder[len('resnet'):] in ['50', '101']:
+                skip_dims = [3, 64, 256, 512, 1024]
+            elif conf.encder[len('resnet'):] in ['18', '34']:
+                skip_dims = [3, 64, 64, 128, 256]
         else:
             raise NotImplementedError(conf.encoder)
 
@@ -155,21 +161,26 @@ class UNet(BaseModel):
         if conf.compute_uncertainty:
             self.uncertainty = nn.ModuleList(uncertainty)
 
-    def _forward(self, data):
-        image = data['image']
+    def _color_normalize(self, image):
         mean, std = image.new_tensor(self.mean), image.new_tensor(self.std)
         image = (image - mean[:, None, None]) / std[:, None, None]
-
+        return image
+    
+    def _forward(self, data):
+        image = self._color_normalize(data['image'])
+        
         skip_features = []
         features = image
         for block in self.encoder:
             features = block(features)
+            print("Encoder layers: {}".format(features.shape))
             skip_features.append(features)
 
         if self.conf.decoder:
             pre_features = [skip_features[-1]]
             for block, skip in zip(self.decoder, skip_features[:-1][::-1]):
                 pre_features.append(block(pre_features[-1], skip))
+                print("Decoder layers: {}".format(pre_features[-1].shape))
             pre_features = pre_features[::-1]  # fine to coarse
         else:
             pre_features = skip_features
@@ -177,6 +188,7 @@ class UNet(BaseModel):
         out_features = []
         for adapt, i in zip(self.adaptation, self.conf.output_scales):
             out_features.append(adapt(pre_features[i]))
+            print("Adapted layers: {}".format(out_features[-1].shape))
         pred = {'feature_maps': out_features}
 
         if self.conf.compute_uncertainty:
@@ -199,21 +211,20 @@ class UNet(BaseModel):
 
 if __name__ == '__main__':
 
-    from dataset.tum_rgbd import TUM
+    from dataset import dataloader
     import argparse
     from omegaconf import OmegaConf
     from torch.utils.data import DataLoader
     import torchvision.utils as torch_utils
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--conf', type=str)
+    parser.add_argument('--conf', type=str, default="config/default.yaml")
     args = parser.parse_args()
 
     if args.conf:
         conf = OmegaConf.load(args.conf)
 
-    # loader = [TUM(conf.data).get_dataset()[i] for i in range(3)]
-    loader = TUM(conf.data).get_dataset()
+    loader = dataloader.load_data(conf.data["name"], conf.data)
     
     torch_loader = DataLoader(
         loader,
@@ -229,24 +240,26 @@ if __name__ == '__main__':
             B, C, H, W = color0.shape
 
             image = torch_utils.make_grid(color0, nrow=4)
+            print(color0.shape)
             image = image.numpy().transpose(1, 2, 0)[:, :, [2, 1, 0]]
             data = {'image': color0.to(torch.float32).cuda()}
             feat_maps = net(data)['feature_maps']
-            feat_maps = torch_utils.make_grid(
-                feat_maps[0].view(-1, 1, H, W),
-                nrow=4
-            )
+            print([feat_maps[i].shape for i in range(len(conf.model.output_scales))])
+            # feat_maps = torch_utils.make_grid(
+            #     feat_maps[0].view(-1, 1, H, W),
+            #     nrow=4
+            # )
 
-            feat_maps = feat_maps.detach().cpu().numpy().transpose(1, 2, 0)
+            # feat_maps = feat_maps.detach().cpu().numpy().transpose(1, 2, 0)
 
-            # import matplotlib.pyplot as plt
-            # plt.figure()
-            # plt.imshow(image)
-            # plt.imshow(feat_maps)
-            # plt.show()
+            # # import matplotlib.pyplot as plt
+            # # plt.figure()
+            # # plt.imshow(image)
+            # # plt.imshow(feat_maps)
+            # # plt.show()
 
-            cv2.namedWindow("feature maps", cv2.WINDOW_NORMAL)
-            cv2.imshow("feature maps", feat_maps)
+            # cv2.namedWindow("feature maps", cv2.WINDOW_NORMAL)
+            # cv2.imshow("feature maps", feat_maps)
             cv2.namedWindow("RGB", cv2.WINDOW_NORMAL)
             cv2.imshow("RGB", image)
             k = cv2.waitKey(10) & 0xFF

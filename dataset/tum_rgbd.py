@@ -1,33 +1,21 @@
-"""
-Data loader fot TUM RBGD benchmark
-"""
-
-
-import sys, os
-
-sys.path.append("..")
+""" Data loader for TUM RGBD """
+import os, random
 import os.path as osp
-import random
 import pickle
-from pathlib import Path
-from omegaconf import OmegaConf
 
 import numpy as np
-import logging
 import torch.utils.data as data
-from transforms3d import quaternions
 
+# from imageio import imread
 import cv2
 from tqdm import tqdm
+from transforms3d import quaternions
+from cv2 import resize, INTER_NEAREST, imread
 
-from .base_dataset import BaseDataset
-from .utils import *
-from .dataset_utils import *
 from dataset import logger
-from utils.tools import print_conf
+from .dataset_utils import *
 
-
-""" 
+"""
 The following scripts use the directory structure as:
 
 root
@@ -118,6 +106,7 @@ def tum_trainval_dict():
                 "rgbd_dataset_freiburg3_sitting_rpy",
                 "rgbd_dataset_freiburg3_sitting_static",
                 "rgbd_dataset_freiburg3_sitting_xyz",
+                "rgbd_dataset_freiburg3_sitting_halfsphere",
                 # "rgbd_dataset_freiburg3_walking_static",  # dynamic scene
                 # "rgbd_dataset_freiburg3_walking_xyz",  # dynamic scene
                 "rgbd_dataset_freiburg3_long_office_household",
@@ -163,91 +152,166 @@ def tum_test_dict():
     }
 
 
-class TUM(BaseDataset):
-    default_conf = {
-        "name": "TUM",
-        "num_workers": 8,
-        "train_batch_size": 1,
-        "val_batch_size": 1,
-        "test_batch_size": 1,
-        "dataset_dir": "TUM_RGBD_Dataset/",
-        "select_traj": "rgbd_dataset_freiburg1_desk",
-        "category": "test",
-        "keyframes": [1],
-        "truncate_depth": True,
-        "grayscale": False,
-        "resize": 0.25,
+def tum_trainval_static_dict():
+    return {
+        "fr1": {
+            "calib": [525.0, 525.0, 319.5, 239.5],
+            "seq": [
+                # "rgbd_dataset_freiburg1_360",
+                # "rgbd_dataset_freiburg1_desk",
+                "rgbd_dataset_freiburg1_desk2",
+                "rgbd_dataset_freiburg1_floor",
+                "rgbd_dataset_freiburg1_room",
+                "rgbd_dataset_freiburg1_xyz",
+                "rgbd_dataset_freiburg1_rpy",
+                "rgbd_dataset_freiburg1_plant",
+                "rgbd_dataset_freiburg1_teddy",
+            ],
+        },
+        "fr2": {
+            "calib": [525.0, 525.0, 319.5, 239.5],
+            "seq": [
+                # "rgbd_dataset_freiburg2_desk",
+                "rgbd_dataset_freiburg2_360_hemisphere",
+                "rgbd_dataset_freiburg2_large_no_loop",
+                "rgbd_dataset_freiburg2_large_with_loop",
+                # "rgbd_dataset_freiburg2_pioneer_360",
+                "rgbd_dataset_freiburg2_pioneer_slam",
+                "rgbd_dataset_freiburg2_pioneer_slam2",
+                "rgbd_dataset_freiburg2_pioneer_slam3",
+                "rgbd_dataset_freiburg2_xyz",
+                "rgbd_dataset_freiburg2_rpy",
+                # "rgbd_dataset_freiburg2_coke",
+                "rgbd_dataset_freiburg2_dishes",
+                # "rgbd_dataset_freiburg2_flowerbouquet_brownbackground",
+                # "rgbd_dataset_freiburg2_metallic_sphere2",
+                # "rgbd_dataset_freiburg2_flowerbouquet",
+                "rgbd_dataset_freiburg2_360_kidnap",
+                "rgbd_dataset_freiburg2_desk_with_person",
+            ],
+        },
+        "fr3": {
+            "calib": [525.0, 525.0, 319.5, 239.5],
+            "seq": [
+                "rgbd_dataset_freiburg3_teddy",
+                "rgbd_dataset_freiburg3_long_office_household",
+            ],
+        },
+        "default": {
+            "calib": [525.0, 525.0, 319.5, 239.5],
+            "seq": [
+                "None",  # anything not list here
+            ],
+        },
     }
 
-    def _init(self, conf):
-        print_conf(self.conf)
 
-    def get_dataset(self):
-        return _Dataset(self.conf)
+def tum_trainval_dynamic_dict():
+    return {
+        "fr3": {
+            "calib": [525.0, 525.0, 319.5, 239.5],
+            "seq": [
+                "rgbd_dataset_freiburg3_walking_halfsphere",
+                "rgbd_dataset_freiburg3_walking_rpy",
+                "rgbd_dataset_freiburg3_sitting_rpy",
+                "rgbd_dataset_freiburg3_sitting_static",
+                "rgbd_dataset_freiburg3_sitting_xyz",
+                "rgbd_dataset_freiburg3_sitting_halfsphere",
+            ],
+        }
+    }
 
 
-class _Dataset(data.Dataset):
-    def __init__(self, conf):
-        super().__init__()
-        self.root = Path(conf.dataset_dir)
-        self.conf = conf
 
-        self.image_seq = []  # list(seq) or list(frame) of string (rbg image path)
+class TUM(data.Dataset): 
+
+    def __init__(self, basedir = '', category='train', setup=None, 
+                 select_traj=None, keyframes=[1], data_transform=None, image_resize=0.25, truncate_depth=True, add_vl_dataset=False):
+        """
+        :param the root directory of the data 
+        :param select the category (train, validation,test)
+        :param select the number of keyframes 
+            Test data only support one keyfame at one time
+            Train/validation data support mixing different keyframes 
+        :param select one particular trajectory at runtime 
+            Only support for testing 
+        """ 
+        super(TUM, self).__init__()
+
+        self.name = 'TUM_RGBD'
+        
+        self.image_seq = []  # list (seq) of list (frame) of string (rgb image path)
         self.timestamp = []  # empty
-        self.depth_seq = []  # list(seq) of list(frame) of string (depth image path)
+        self.depth_seq = []  # list (seq) of list (frame) of string (depth image path)
         self.invalid_seq = []  # empty
-        self.cam_pose_seq = []  # list(seq) of list(frame) of 4 x 4 ndarray
-        self.calib = []  # list(seq) of list(intrinsics: fx, fy, cx, cy)
-        self.seq_names = []  # list(seq) or string(seq name)
+        self.cam_pose_seq= []  # list (seq) of list (frame) of 4 X 4 ndarray
+        self.calib = []  # list (seq) of list (intrinsics: fx, fy, cx, cy)
+        self.seq_names = []   # list (seq) of string (seq name)
 
         self.ids = 0
         self.seq_acc_ids = [0]
-        self.keyframes = self.conf.keyframes
+        self.keyframes = keyframes
 
-        if self.conf.category in ["test", "full"]:
-            self.__load_test()
-        elif self.conf.category in ["train", "validation"]:
-            self.__load_train_val()
+        self.transforms = data_transform
+        # downscale the input image to a quarter
+        self.fx_s = image_resize
+        self.fy_s = image_resize
+        self.truncate_depth = truncate_depth
+
+        if category in ["test", "full"]:
+            self.__load_test(basedir, category, select_traj)
+        elif category in ["train", "validation"]: # train and validation
+            self.__load_train_val(basedir, category, setup, 
+                                  select_traj=select_traj,
+                                  add_vl_dataset=add_vl_dataset)
         else:
             raise NotImplementedError()
 
-        self.truncate_depth = self.conf.truncate_depth
+        print('TUM RGB-D dataloader for {:} using keyframe {:}: \
+            {:} valid frames'.format(category, keyframes, self.ids))
 
-        logger.info(
-            f"{self.conf.name} dataloader for {self.conf.category} using keyframe {self.keyframes}: {self.ids} valid frames."
-        )
+    def __load_train_val(self, root, category, setup=None, select_traj=None, add_vl_dataset=False):
 
-    def __load_train_val(self):
-        tum_data = tum_trainval_dict()
+        if setup == 'static':
+            tum_data = tum_trainval_static_dict()
+        elif setup == 'dynamic':
+            tum_data = tum_trainval_dynamic_dict()
+        else:
+            tum_data = tum_trainval_dict()
+            
+        if add_vl_dataset:
+            vl_data = vary_lighting_trainval_dict()
+            tum_data.update(vl_data)
+
         for ks, scene in tum_data.items():
-            for seq_name in scene['seq']:
-
+            for seq_name in scene['seq']: 
+                
                 seq_path = seq_name
-                if self.conf.select_traj is not None:
-                    if seq_path != self.conf.select_traj:
-                        continue
+                if seq_name == 'None':
+                    continue
+                if select_traj is not None:
+                    if seq_path != select_traj: continue
 
                 self.calib.append(scene['calib'])
-                datacache_root = osp.join(osp.dirname(__file__), f"cache/{self.conf.name}")
-                sync_traj_file = osp.join(
-                    datacache_root, seq_path, "sync_trajectory.pkl"
-                )
+                # synchronized trajectory file 
+                datacache_root = osp.join(osp.dirname(__file__), f'cache/{self.name}')
+                sync_traj_file = osp.join(datacache_root, seq_path, 'sync_trajectory.pkl') 
                 if not osp.isfile(sync_traj_file):
-                    logger.info(
-                        f"Synchronized trajectory file {sync_traj_file} has not been generated."
-                    )
-                    logging.info("Generate it now ...")
-                    write_sync_trajectory(self.root, seq_name, dataset=self.conf.name)
+                    print("The synchronized trajectory file {:} has not been generated.".format(sync_traj_file))
+                    print("Generate it now...")
+                    # write_sync_trajectory(root, ks, seq_name)
+                    write_sync_trajectory(root, seq_name, dataset=self.name)
 
-                with open(sync_traj_file, "rb") as f:
-                    trainval = pickle.load(f)
+                with open(sync_traj_file, 'rb') as p:
+                    trainval = pickle.load(p)
                     total_num = len(trainval)
+                    # the ratio to split the train & validation set                        
                     train_ids, val_ids = self.__gen_trainval_index(total_num)
-                    if self.conf.category == "train":
+                    if category == "train":
                         ids = train_ids
                     else:
                         ids = val_ids
-                    
+
                     images = [trainval[idx][1] for idx in ids]
                     depths = [trainval[idx][2] for idx in ids]
                     poses = [  # extrinsic
@@ -265,7 +329,6 @@ class _Dataset(data.Dataset):
                     self.ids += max(0, len(images) - max(self.keyframes))
                     self.seq_acc_ids.append(self.ids)
 
-
     def __gen_trainval_index(self, seq_len, ratio = 0.1):
         s = int((1 - ratio) // ratio)
         indices = np.arange(seq_len)
@@ -274,41 +337,49 @@ class _Dataset(data.Dataset):
         train_ids = np.setdiff1d(indices, val_ids)
         print(len(train_ids), len(val_ids))
         return train_ids, val_ids
-        
 
-    def __load_test(self):
-        if self.conf.category == 'full':
+    def __load_test(self, root, category='test', select_traj=None):
+        """ Note: 
+        The test trajectory is loaded slightly different from the train/validation trajectory. 
+        We only select keyframes from the entire trajectory, rather than use every individual frame. 
+        For a given trajectory of length N, using key-frame 2, the train/validation set will use 
+        [[1, 3], [2, 4], [3, 5],...[N-1, N]], 
+        while test set will use pair 
+        [[1, 3], [3, 5], [5, 7],...[N-1, N]]
+        This difference result in a change in the trajectory length when using different keyframes.
+
+        The benefit of sampling keyframes of the test set is that the output is a more reasonable trajectory;
+        And in training/validation, we fully leverage every pair of image.
+        """
+
+        if category == 'full':
             tum_data = tum_sequences_dict()
         else:
             tum_data = tum_test_dict()
-        assert len(self.keyframes) == 1
-        kf = self.conf.keyframes[0]
+        assert(len(self.keyframes) == 1) 
+        kf = self.keyframes[0]
         self.keyframes = [1]
 
         for ks, scene in tum_data.items():
-            for seq_name in scene["seq"]:
+            for seq_name in scene['seq']:
                 seq_path = seq_name
+                if seq_name == 'None':
+                    continue
+                
+                if select_traj is not None: 
+                    if seq_path != select_traj: continue
 
-                if self.conf.select_traj is not None:
-                    if seq_path != self.conf.select_traj:
-                        continue
-
-                self.calib.append(scene["calib"])
-
-                # load or generate synchronized trajectory file
-                datacache_root = osp.join(osp.dirname(__file__), f"cache/{self.conf.name}")
-                sync_traj_file = osp.join(
-                    datacache_root, seq_path, "sync_trajectory.pkl"
-                )
+                self.calib.append(scene['calib'])
+                # synchronized trajectory file 
+                datacache_root = osp.join(osp.dirname(__file__), f'cache/{self.name}')
+                sync_traj_file = osp.join(datacache_root, seq_path, 'sync_trajectory.pkl') 
                 if not osp.isfile(sync_traj_file):
-                    logger.info(
-                        f"Synchronized trajectory file {sync_traj_file} has not been generated."
-                    )
-                    logging.info("Generate it now ...")
-                    write_sync_trajectory(self.root, seq_name, dataset=self.conf.name)
+                    print("The synchronized trajectory file {:} has not been generated.".format(seq_path))
+                    print("Generate it now...")
+                    write_sync_trajectory(root, seq_name, dataset=self.name)
 
-                with open(sync_traj_file, "rb") as f:
-                    frames = pickle.load(f)
+                with open(sync_traj_file, 'rb') as p:
+                    frames = pickle.load(p)
                     total_num = len(frames)
 
                     images = [frames[idx][1] for idx in range(0, total_num, kf)]
@@ -316,37 +387,31 @@ class _Dataset(data.Dataset):
                     poses = [  # extrinsic
                         tq2mat(frames[idx][0]) for idx in range(0, total_num, kf)
                     ]
-                    timestamp = [
-                        osp.splitext(osp.basename(image))[0] for image in images
-                    ]
+                    timestamp = [osp.splitext(os.path.basename(image))[0] for image in images]
 
-                    self.timestamp.append(timestamp)
                     self.image_seq.append(images)
+                    self.timestamp.append(timestamp)
                     self.depth_seq.append(depths)
                     self.cam_pose_seq.append(poses)
                     self.seq_names.append(seq_path)
-                    self.ids += max(0, len(images) - 1)
+                    self.ids += max(0, len(images)-1)
                     self.seq_acc_ids.append(self.ids)
 
         if len(self.image_seq) == 0:
-            logger.warn(
-                "The specified trajectory {:} is not in the test set."
-                "\nTry to support this customized dataset".format(self.conf.select_traj)
-            )
-            if osp.exists(osp.join(self.root, self.conf.select_traj)):
-                self.calib.append(tum_sequences_dict()["default"]["calib"])
-                sync_traj_file = osp.join(self.root, self.conf.select_traj)
-                seq_name = seq_path = osp.basename(self.conf.select_traj)
+            print("The specified trajectory is not in the test set."
+                  "try to support this customized dataset")
+            if os.path.exists(osp.join(root, select_traj)):  # if the input traj is a tum-format folder
+                self.calib.append(tum_test_dict()['default']['calib'])
+                # synchronized trajectory file
+                sync_traj_file = osp.join(root, select_traj)
+                seq_name = seq_path = os.path.basename(select_traj)
                 if not osp.isfile(sync_traj_file):
-                    logger.info(
-                        "The synchronized trajctory file {:} has not been generated.".format(
-                            seq_path
-                        )
-                    )
-                    logger.info("Generate it now ...")
-                    write_sync_trajectory(self.root, self.conf.select_traj)
+                    print("The synchronized trajectory file {:} has not been generated.".format(seq_path))
+                    print("Generate it now...")
+                    # write_sync_trajectory(root, ks, seq_name)
+                    write_sync_trajectory(root, select_traj)
 
-                with open(sync_traj_file, "rb") as p:
+                with open(sync_traj_file, 'rb') as p:
                     frames = pickle.load(p)
                     total_num = len(frames)
 
@@ -356,7 +421,7 @@ class _Dataset(data.Dataset):
                     images = [frames[idx][1] for idx in range(total_num)]
                     depths = [frames[idx][2] for idx in range(total_num)]
                     poses = [  # extrinsic
-                        tq2mat(frames[idx][0] for idx in range(0, total_num, kf))
+                        tq2mat(frames[idx][0]) for idx in range(0, total_num, kf)
                     ]
 
                     self.timestamp.append(timestamp)
@@ -367,47 +432,48 @@ class _Dataset(data.Dataset):
                     self.ids += max(0, len(images) - 1)
                     self.seq_acc_ids.append(self.ids)
             else:
-                raise Exception(
-                    "The specified trajectory is not in the test set nor a supported customized dataset"
-                )
+                raise Exception("The specified trajectory is not in the test set nor supported.")
 
-    def __getitem__(self, idx):
-        seq_idx = max(np.searchsorted(self.seq_acc_ids, idx + 1) - 1, 0)
-        frame_idx = idx - self.seq_acc_ids[seq_idx]
+    def get_keypair(self, index, kf_idx=0):
+        # pair in the way like [[1, 3], [1, 5], [1, 7],...[1, N]]
+        seq_idx = max(np.searchsorted(self.seq_acc_ids, index + 1) - 1, 0)
+        frame_idx = index - self.seq_acc_ids[seq_idx]
 
-        this_idx = frame_idx
-        next_idx = frame_idx + random.choice(self.keyframes)
+        this_idx = kf_idx
+        next_idx = frame_idx
 
-        color0, scale = self.__load_rgb_tensor(self.image_seq[seq_idx][this_idx])
-        color1, _ = self.__load_rgb_tensor(self.image_seq[seq_idx][next_idx])
+        color0 = self.__load_rgb_tensor(self.image_seq[seq_idx][this_idx])
+        color1 = self.__load_rgb_tensor(self.image_seq[seq_idx][next_idx])
 
         depth0 = self.__load_depth_tensor(self.depth_seq[seq_idx][this_idx])
         depth1 = self.__load_depth_tensor(self.depth_seq[seq_idx][next_idx])
 
-        # normalize the coordinate
+        if self.transforms:
+            color0, color1 = self.transforms([color0, color1])
+
+            # normalize the coordinate
         calib = np.asarray(self.calib[seq_idx], dtype=np.float32)
-        self.fx_s, self.fy_s = scale
         calib[0] *= self.fx_s
         calib[1] *= self.fy_s
         calib[2] *= self.fx_s
         calib[3] *= self.fy_s
 
         cam_pose0 = self.cam_pose_seq[seq_idx][this_idx]
-        cam_pose1 = self.cam_pose_seq[seq_idx][this_idx]
+        cam_pose1 = self.cam_pose_seq[seq_idx][next_idx]
         transform = np.dot(np.linalg.inv(cam_pose1), cam_pose0).astype(np.float32)
 
-        name = {"seq": self.seq_names[seq_idx], "frame0": this_idx, "frame1": next_idx}
+        name = {'seq': self.seq_names[seq_idx],
+                'frame0': this_idx,
+                'frame1': next_idx}
 
-        # camera_info
-        camera_info = {
-            "height": color0.shape[0],
-            "width": color0.shape[1],
-            "fx": calib[0],
-            "fy": calib[1],
-            "ux": calib[2],
-            "uy": calib[3],
-        }
-
+        # camera_info = dict()
+        camera_info = {"height": color0.shape[0],
+                       "width": color0.shape[1],
+                       "fx": calib[0],
+                       "fy": calib[1],
+                       "ux": calib[2],
+                       "uy": calib[3]}
+        
         data = {
             "name": name,
             "data": [color0, color1, depth0, depth1, transform, calib],
@@ -415,54 +481,107 @@ class _Dataset(data.Dataset):
         }
         return data
 
-    def __len__(self):
+    def __getitem__(self, index): 
+        seq_idx = max(np.searchsorted(self.seq_acc_ids, index+1) - 1, 0)
+        frame_idx = index - self.seq_acc_ids[seq_idx]
+
+        this_idx = frame_idx
+        next_idx = frame_idx + random.choice(self.keyframes)
+
+        color0 = self.__load_rgb_tensor(self.image_seq[seq_idx][this_idx])
+        color1 = self.__load_rgb_tensor(self.image_seq[seq_idx][next_idx])
+
+        depth0 = self.__load_depth_tensor(self.depth_seq[seq_idx][this_idx])
+        depth1 = self.__load_depth_tensor(self.depth_seq[seq_idx][next_idx])
+
+        if self.transforms:
+            color0, color1 = self.transforms([color0, color1])            
+
+        # normalize the coordinate
+        calib = np.asarray(self.calib[seq_idx], dtype=np.float32)
+        calib[0] *= self.fx_s
+        calib[1] *= self.fy_s
+        calib[2] *= self.fx_s
+        calib[3] *= self.fy_s
+
+        cam_pose0 = self.cam_pose_seq[seq_idx][this_idx]
+        cam_pose1 = self.cam_pose_seq[seq_idx][next_idx]
+
+        # Relative transform
+        transform = np.dot(np.linalg.inv(cam_pose1), cam_pose0).astype(np.float32)        
+
+        name = {'seq': self.seq_names[seq_idx],
+                'frame0': this_idx,
+                'frame1': next_idx}
+
+        # camera_info = dict()
+        camera_info = {"height": color0.shape[0],
+                       "width": color0.shape[1],
+                       "fx": calib[0],
+                       "fy": calib[1],
+                       "ux": calib[2],
+                       "uy": calib[3]}
+
+        data = {
+            "name": name,
+            "data": [color0, color1, depth0, depth1, transform, calib],
+            "camera_info": camera_info,
+        }
+        return data
+    
+
+    def __len__(self): 
         return self.ids
 
     def __load_rgb_tensor(self, path):
-        """Load the rgb image."""
-        image = read_image(path, self.conf.grayscale) / 255.0
-        image, scale = resize(image, self.conf.resize, interp="linear")
-        image = np.transpose(image, (2, 0, 1))  # channel first convention
-        return image, scale
+        """ Load the rgb image. """
+        image = imread(path)[:, :, [2, 1, 0]]
+        image = image.astype(np.float32) / 255.0
+        image = resize(image, None, fx=self.fx_s, fy=self.fy_s)
+        return image
 
     def __load_depth_tensor(self, path):
-        """Load depth:
-        The depth images are scaled by a factor of 5000, i.e., a pixel value of 5000 in the depth image corresponds to a distance of 1 meter from the camera, 10000 to 2 meter distance, etc. A pixel value of 0 means missing value/no data.
+        """ Load the depth:
+            The depth images are scaled by a factor of 5000, i.e., a pixel 
+            value of 5000 in the depth image corresponds to a distance of 
+            1 meter from the camera, 10000 to 2 meter distance, etc. 
+            A pixel value of 0 means missing value/no data.
         """
-        # depth = read_image(path) / 5e3
-        depth = cv2.imread(path, cv2.IMREAD_ANYDEPTH).astype(np.float32) / 5e3
-        depth, _ = resize(depth, self.conf.resize, interp="nearest")
+        # depth = imread(path).astype(np.float32) / 5e3
+        depth = imread(path, cv2.IMREAD_ANYDEPTH).astype(np.float32) / 5e3
+        depth = resize(depth, None, fx=self.fx_s, fy=self.fy_s, interpolation=INTER_NEAREST)
         if self.truncate_depth:
-            # the accurate range of kinect depth
-            valid_depth = (depth > 0.5) & (depth < 5.0)
+            valid_depth = (depth > 0.5) & (depth < 5.0) # the accurate range of kinect depth
             depth = np.where(valid_depth, depth, 0.0)
-        return depth[None, :]  # channel first convention
+        return depth[None, :]        
 
 
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--conf", type=str)
-    args = parser.parse_args()
-
-    if args.conf:
-        conf = OmegaConf.load(args.conf)
-
-    loader = TUM(conf.data).get_dataset()
+if __name__ == '__main__': 
     import torchvision.utils as torch_utils
+    from dataset.dataloader import image_transforms
+    seqs = []
+    for ks, scene in tum_test_dict().items():
+        seq_names = scene['seq']
+        seq_names = [f'fr{name[21:]}' for name in seq_names]
+        seqs += (seq_names)
+    print(seqs)
 
-    torch_loader = data.DataLoader(loader, batch_size=16, shuffle=False, num_workers=4)
+    data_transform = image_transforms(['numpy2torch'])
 
-    for batch in torch_loader:
-        item = batch
-        color0, color1, depth0, depth1, transform, calib = item["data"]
+    loader = TUM(basedir='/home/jingkun/Dataset/TUM_RGBD_Dataset', category='full', setup='dynamic', keyframes=[1], data_transform=data_transform)
+ 
+    torch_loader = data.DataLoader(loader, batch_size=16, 
+        shuffle=False, num_workers=4)
+
+    for batch in torch_loader: 
+        name = batch["name"]
+        color0, color1, depth0, depth1, transform, K = batch["data"]
         B, C, H, W = color0.shape
+        print(color0.shape)
 
         bcolor0_img = torch_utils.make_grid(color0, nrow=4)
 
         import matplotlib.pyplot as plt
-
         plt.figure()
-        plt.imshow(bcolor0_img.numpy().transpose(1, 2, 0))
+        plt.imshow(bcolor0_img.numpy().transpose(1,2,0))
         plt.show()

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 python -B experiment/rgbd_vo.py \
---dataset TUM_RGBD \
+--dataset CoFusion \
 --encoder_name RGB \
 --mestimator None \
 --solver Direct-Nodamping \
@@ -11,7 +11,7 @@ python -B experiment/rgbd_vo.py \
 --feature_extract conv \
 --uncertainty laplacian \
 --uncertainty_channel 1 \
---direction inverse \
+--direction forward \
 --init_pose sfm_net \
 --train_init_pose \
 --multi_hypo prob_fuse \
@@ -19,7 +19,8 @@ python -B experiment/rgbd_vo.py \
 --checkpoint checkpoint/dynamic_finetune_checkpoint_epoch39.pth.tar \
 --vo RGB \
 --image_resize 0.25 \
-# --gt_tracker
+--max_iter_per_pyr 10
+# --gt_tracker \
 # --time \
 # --vis_feat \
 

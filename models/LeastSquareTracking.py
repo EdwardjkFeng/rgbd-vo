@@ -745,6 +745,8 @@ class LeastSquareTracking(nn.Module):
 
         x0, sigma0, orig_x0 = self.__encode_features(I0, invD0, I1, invD1)
         x1, sigma1, orig_x1 = self.__encode_features(I1, invD1, I0, invD0)
+        # x0, sigma0, orig_x0 = self.__encode_features(img0, invD0, img1, invD1)
+        # x1, sigma1, orig_x1 = self.__encode_features(img1, invD1, img0, invD0)
         inv_d0 = self.construct_depth_pyramids(invD0)
         inv_d1 = self.construct_depth_pyramids(invD1)
 
